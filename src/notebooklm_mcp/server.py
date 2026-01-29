@@ -552,12 +552,14 @@ async def notebook_query_stream(
             else:
                 answer_chunks.append(chunk["text"])
                 mcp_logger.debug(f"📤 Streaming chunk #{chunk_count} (answer): {len(chunk['text'])} chars")
-                # Report answer progress
+                # Report answer progress with actual answer text
                 if ctx:
+                    # Send answer chunk with 💡 prefix so client can identify it
+                    # Format: "💡<chunk_text>" - client should strip prefix and append text
                     await ctx.report_progress(
                         progress=chunk_count,
                         total=chunk_count + 1,
-                        message=f"💡 Receiving answer...",
+                        message=f"💡{chunk['text']}",
                     )
 
         # Combine answer chunks (use longest as final answer)

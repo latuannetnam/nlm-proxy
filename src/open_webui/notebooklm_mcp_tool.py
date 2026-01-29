@@ -532,14 +532,38 @@ class Tools:
                             }
                         })
                     
-                    elif "💡" in message:
-                        # Answer is arriving
-                        await __event_emitter__({
-                            "type": "message",
-                            "data": {
-                                "content": "\n\n**📝 Answer:**\n\n"
-                            }
-                        })
+                    elif message.startswith("💡"):
+                        # Answer chunk - extract actual text after emoji
+                        answer_text = message[1:].strip()  # Remove 💡 prefix
+                        if answer_text:
+                            # First answer chunk - add header
+                            if not answer_parts:
+                                await __event_emitter__({
+                                    "type": "message",
+                                    "data": {
+                                        "content": "\n\n**📝 Answer:**\n\n"
+                                    }
+                                })
+                            
+                            # Track answer parts
+                            answer_parts.append(answer_text)
+                            
+                            # Stream answer chunk to chat
+                            # Calculate delta (new text since last chunk)
+                            if len(answer_parts) == 1:
+                                delta = answer_text
+                            else:
+                                # Answer chunks are cumulative, so calculate the delta
+                                prev_len = len(answer_parts[-2]) if len(answer_parts) > 1 else 0
+                                delta = answer_text[prev_len:] if len(answer_text) > prev_len else ""
+                            
+                            if delta:
+                                await __event_emitter__({
+                                    "type": "message",
+                                    "data": {
+                                        "content": delta
+                                    }
+                                })
             
             # Call MCP tool with streaming
             result = await adapter.call_tool_streaming(

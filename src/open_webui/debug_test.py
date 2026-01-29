@@ -160,10 +160,21 @@ async def test_streaming_query():
             event_type = event.get('type')
             if event_type == 'status':
                 desc = event.get('data', {}).get('description', '')
+                # Truncate long status messages
+                if len(desc) > 80:
+                    desc = desc[:77] + "..."
                 print(f"  📤 Status: {desc}")
             elif event_type == 'message':
-                content = event.get('data', {}).get('content', '')[:50]
-                print(f"  📤 Message: {content}...")
+                content = event.get('data', {}).get('content', '')
+                # Show content type and length
+                if "**💭 Thinking:**" in content:
+                    preview = content[20:70].replace('\n', ' ')
+                    print(f"  📤 Message [thinking]: {preview}...")
+                elif "**📝 Answer:**" in content:
+                    print(f"  📤 Message [answer header]")
+                else:
+                    # Streaming answer chunk
+                    print(f"  📤 Message [answer +{len(content)} chars]: {content[:40].replace(chr(10), ' ')}...")
         
         print(f"\n→ Querying notebook {notebook_id}...")
         result = await tool.notebook_query_stream(
