@@ -163,14 +163,13 @@ class MCPClientAdapter:
                 async for chunk in response.aiter_text():
                     buffer += chunk
                     
-                    # Process complete SSE events (terminated by \n\n)
-                    while "\n\n" in buffer:
-                        parts = buffer.split("\n\n", 1)
-                        event_block = parts[0]
-                        buffer = parts[1] if len(parts) > 1 else ""
+                    # Process complete SSE events (terminated by \n\n) or data: lines
+                    while "\n\n" in buffer or "\ndata: " in buffer:
+                        # Find complete events
+                        lines = buffer.split("\n")
+                        processed_lines = 0
                         
-                        # Parse SSE event lines
-                        for line in event_block.split("\n"):
+                        for i, line in enumerate(lines):
                             line = line.strip()
                             
                             if line.startswith("data: "):
@@ -188,23 +187,70 @@ class MCPClientAdapter:
                                             else:
                                                 on_progress(params)
                                     
-                                    # Handle final result
-                                    elif "result" in event_data:
+                                    # Handle final result or error
+                                    elif "result" in event_data or "error" in event_data:
+                                        if "error" in event_data:
+                                            error = event_data["error"]
+                                            raise RuntimeError(
+                                                f"MCP tool error: {error.get('message', str(error))}"
+                                            )
                                         final_result = event_data["result"]
-                                    
-                                    # Handle errors
-                                    elif "error" in event_data:
-                                        error = event_data["error"]
-                                        raise RuntimeError(
-                                            f"MCP tool error: {error.get('message', str(error))}"
-                                        )
+                                        processed_lines = i + 1
+                                        break
                                 
                                 except json.JSONDecodeError:
                                     # Skip malformed JSON
-                                    continue
+                                    pass
+                            
+                            processed_lines = i + 1
+                        
+                        # Remove processed lines from buffer
+                        buffer = "\n".join(lines[processed_lines:])
+                        
+                        # If we found a result, we can stop
+                        if final_result is not None:
+                            break
+                    
+                    # If we already have a result, stop processing chunks
+                    if final_result is not None:
+                        break
+                
+                # Process any remaining buffer after stream ends
+                if final_result is None and buffer.strip():
+                    for line in buffer.split("\n"):
+                        line = line.strip()
+                        if line.startswith("data: "):
+                            data_json = line[6:]
+                            try:
+                                event_data = json.loads(data_json)
+                                if "result" in event_data:
+                                    final_result = event_data["result"]
+                                    break
+                                elif "error" in event_data:
+                                    error = event_data["error"]
+                                    raise RuntimeError(
+                                        f"MCP tool error: {error.get('message', str(error))}"
+                                    )
+                            except json.JSONDecodeError:
+                                pass
         
         if final_result is None:
             raise RuntimeError("No result received from MCP server")
+        
+        # Extract actual content from MCP response structure
+        # MCP returns: {"content": [...], "structuredContent": {...}, "isError": false}
+        if isinstance(final_result, dict):
+            # Check for structuredContent first (most reliable)
+            if "structuredContent" in final_result:
+                return final_result["structuredContent"]
+            # Check for content array
+            elif "content" in final_result:
+                content_items = final_result["content"]
+                if isinstance(content_items, list) and len(content_items) > 0:
+                    # Extract text from first content item
+                    first_item = content_items[0]
+                    if isinstance(first_item, dict) and "text" in first_item:
+                        return first_item["text"]
         
         return final_result
     
@@ -237,7 +283,7 @@ class MCPClientAdapter:
         }
         
         headers = {
-            "Accept": "application/json",
+            "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
             "mcp-session-id": self.session_id
         }
@@ -250,15 +296,43 @@ class MCPClientAdapter:
             )
             response.raise_for_status()
             
-            result = response.json()
+            # Check if response is SSE (text/event-stream) or JSON
+            content_type = response.headers.get("content-type", "")
             
-            if "error" in result:
-                error = result["error"]
-                raise RuntimeError(
-                    f"MCP tool error: {error.get('message', str(error))}"
-                )
-            
-            return result.get("result", {})
+            if "text/event-stream" in content_type:
+                # Parse SSE response
+                result = None
+                for line in response.text.split("\n"):
+                    line = line.strip()
+                    if line.startswith("data: "):
+                        data_json = line[6:]
+                        try:
+                            event_data = json.loads(data_json)
+                            if "result" in event_data:
+                                result = event_data["result"]
+                            elif "error" in event_data:
+                                error = event_data["error"]
+                                raise RuntimeError(
+                                    f"MCP tool error: {error.get('message', str(error))}"
+                                )
+                        except json.JSONDecodeError:
+                            continue
+                
+                if result is None:
+                    raise RuntimeError("No result received from MCP server")
+                
+                return result
+            else:
+                # Parse JSON response
+                result = response.json()
+                
+                if "error" in result:
+                    error = result["error"]
+                    raise RuntimeError(
+                        f"MCP tool error: {error.get('message', str(error))}"
+                    )
+                
+                return result.get("result", {})
 
 
 class Tools:
@@ -482,6 +556,15 @@ class Tools:
             # Extract final answer
             final_answer = ""
             if isinstance(result, dict):
+                # Debug: Log raw result structure if debug enabled
+                if self.valves.enable_debug and __event_emitter__:
+                    import json as json_debug
+                    debug_msg = f"DEBUG: Raw MCP result structure: {json_debug.dumps(result, default=str, indent=2)}"
+                    await __event_emitter__({
+                        "type": "status",
+                        "data": {"description": debug_msg[:200], "done": False}
+                    })
+                
                 # Handle content array format
                 if "content" in result and isinstance(result["content"], list):
                     for item in result["content"]:
@@ -507,6 +590,16 @@ class Tools:
                 # Fallback to text content
                 elif "text" in result:
                     final_answer = result["text"]
+                
+                # Debug: Log what was extracted
+                if self.valves.enable_debug and __event_emitter__:
+                    await __event_emitter__({
+                        "type": "status",
+                        "data": {
+                            "description": f"DEBUG: Extracted answer length: {len(final_answer)} chars",
+                            "done": False
+                        }
+                    })
             
             # Final status update
             if __event_emitter__:
@@ -571,7 +664,13 @@ class Tools:
             # Parse response
             notebooks = []
             if isinstance(result, dict):
-                if "content" in result and isinstance(result["content"], list):
+                # Check for structuredContent (new format)
+                if "structuredContent" in result:
+                    structured = result["structuredContent"]
+                    if isinstance(structured, dict):
+                        notebooks = structured.get("notebooks", [])
+                # Check for content array (old format)
+                elif "content" in result and isinstance(result["content"], list):
                     for item in result["content"]:
                         if item.get("type") == "text":
                             try:
@@ -580,6 +679,7 @@ class Tools:
                                 break
                             except json.JSONDecodeError:
                                 pass
+                # Direct notebooks key
                 elif "notebooks" in result:
                     notebooks = result["notebooks"]
             
