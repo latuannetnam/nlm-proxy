@@ -524,13 +524,14 @@ class Tools:
                         thinking_text = message.replace("🤔 ", "").strip()
                         thinking_steps.append(thinking_text)
                         
-                        # Stream thinking step to chat
-                        await __event_emitter__({
-                            "type": "message",  # Appends to message content
-                            "data": {
-                                "content": f"\n\n**💭 Thinking:** {thinking_text}\n"
-                            }
-                        })
+                        # Stream thinking step to chat only if debug is enabled
+                        if self.valves.enable_debug:
+                            await __event_emitter__({
+                                "type": "message",  # Appends to message content
+                                "data": {
+                                    "content": f"\n\n**💭 Thinking:** {thinking_text}\n"
+                                }
+                            })
                     
                     elif message.startswith("💡"):
                         # Answer chunk - extract actual text after emoji
