@@ -493,10 +493,11 @@ class Tools:
             answer_parts: list[str] = []
             progress_count = 0
             final_conversation_id = conversation_id
+            has_streamed_answer = False  # Track if we've streamed answer chunks
             
             # Progress callback for streaming updates
             async def handle_progress(params: dict):
-                nonlocal progress_count, thinking_steps, answer_parts
+                nonlocal progress_count, thinking_steps, answer_parts, has_streamed_answer
                 progress_count += 1
                 
                 message = params.get("message", "Processing...")
@@ -548,6 +549,7 @@ class Tools:
                             
                             # Track answer parts
                             answer_parts.append(answer_text)
+                            has_streamed_answer = True  # Mark that we've streamed answer
                             
                             # Stream answer chunk to chat
                             # Calculate delta (new text since last chunk)
@@ -641,6 +643,16 @@ class Tools:
                 })
             
             # Format final response
+            # If we've already streamed the answer chunks, don't return the full answer again
+            # to avoid duplicate content in the UI
+            if has_streamed_answer and not is_native_mode:
+                # Return a completion marker to prevent the model from adding its own response
+                # The conversation ID is appended if available
+                completion_msg = "\n\n---\n*✅ Response complete.*"
+                if final_conversation_id:
+                    completion_msg += f" *💬 Conversation ID: `{final_conversation_id}` (use for follow-ups)*"
+                return completion_msg
+            
             response = final_answer or "No answer received from NotebookLM."
             
             if final_conversation_id and not is_native_mode:
