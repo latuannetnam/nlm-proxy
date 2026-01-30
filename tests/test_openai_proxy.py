@@ -109,6 +109,32 @@ def test_chat_completions_streaming():
         assert "data: [DONE]" in response.text
 
 
+def test_chat_completions_streaming_with_thinking():
+    from notebooklm_mcp.openai_proxy import app
+
+    async def mock_stream():
+        yield {"type": "thinking", "text": "Reading sources...", "conversation_id": "conv-123"}
+        yield {"type": "answer", "text": "42", "conversation_id": "conv-123"}
+
+    with patch("notebooklm_mcp.openai_proxy.get_client") as mock_get_client:
+        mock_client = MagicMock()
+        mock_client.query_stream = MagicMock(return_value=mock_stream())
+        mock_client.close = AsyncMock()
+        mock_get_client.return_value = mock_client
+
+        client = TestClient(app)
+        response = client.post("/v1/chat/completions", json={
+            "model": "nb-123",
+            "messages": [{"role": "user", "content": "What?"}],
+            "stream": True,
+            "include_thinking": True  # Should include thinking chunks
+        })
+
+        assert response.status_code == 200
+        # Thinking chunk should be included
+        assert "Reading sources" in response.text
+
+
 def test_cli_help():
     result = subprocess.run(
         [sys.executable, "-m", "notebooklm_mcp.openai_proxy", "--help"],
