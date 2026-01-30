@@ -205,6 +205,68 @@ Use this test plan when:
 - Testing new tool implementations
 - Debugging MCP tool issues
 
+## OpenAI-Compatible Proxy
+
+An OpenAI-compatible proxy server that allows connecting any OpenAI client to NotebookLM.
+
+### Usage
+
+```bash
+# Start the proxy server
+notebooklm-openai --port 8080
+
+# Or with custom host
+notebooklm-openai --host 127.0.0.1 --port 8000
+```
+
+### Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /v1/chat/completions` | Chat with NotebookLM (streaming + non-streaming) |
+| `GET /v1/models` | List notebooks as available models |
+| `POST /v1/embeddings` | Returns 501 (not supported) |
+| `GET /health` | Health check |
+
+### Example: OpenAI Python SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="dummy")
+
+# List available notebooks
+models = client.models.list()
+for model in models:
+    print(f"{model.id}: {model.name}")
+
+# Chat with a notebook
+response = client.chat.completions.create(
+    model="<notebook-uuid>",  # Use notebook ID from models list
+    messages=[{"role": "user", "content": "Summarize the key points"}],
+    stream=True
+)
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### Custom Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `conversation_id` | string | null | For multi-turn conversations |
+| `include_thinking` | bool | false | Include NotebookLM's thinking steps |
+
+Pass via `extra_body`:
+```python
+response = client.chat.completions.create(
+    model="notebook-id",
+    messages=[...],
+    extra_body={"conversation_id": "prev-conv-id", "include_thinking": True}
+)
+```
+
 ## Contributing
 
 When adding new features:
