@@ -4,12 +4,16 @@ import time
 import uuid
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 
 from .api_client import NotebookLMClient
 from .auth import load_cached_tokens
 from .openai_types import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    ChatCompletionChunk,
+    Choice,
+    DeltaContent,
     ResponseChoice,
     ResponseMessage,
     Usage,
@@ -69,10 +73,50 @@ async def list_models():
         await client.close()
 
 
+async def stream_response(client, notebook_id: str, query_text: str, request: ChatCompletionRequest):
+    """Generate OpenAI-compatible SSE stream from NotebookLM query_stream."""
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    created = int(time.time())
+    conversation_id = None
+
+    try:
+        async for chunk in client.query_stream(
+            notebook_id=notebook_id,
+            query_text=query_text,
+            conversation_id=request.conversation_id
+        ):
+            # Filter thinking unless requested
+            if chunk["type"] == "thinking" and not request.include_thinking:
+                continue
+
+            conversation_id = chunk.get("conversation_id", conversation_id)
+
+            openai_chunk = ChatCompletionChunk(
+                id=chunk_id,
+                created=created,
+                model=notebook_id,
+                choices=[Choice(delta=DeltaContent(content=chunk["text"]))],
+                system_fingerprint=f"conv_{conversation_id}" if conversation_id else None
+            )
+            yield f"data: {openai_chunk.model_dump_json()}\n\n"
+
+        # Final chunk with finish_reason
+        final_chunk = ChatCompletionChunk(
+            id=chunk_id,
+            created=created,
+            model=notebook_id,
+            choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
+            system_fingerprint=f"conv_{conversation_id}" if conversation_id else None
+        )
+        yield f"data: {final_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+    finally:
+        await client.close()
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
     """OpenAI-compatible chat completions endpoint."""
-    # Extract last user message
     user_messages = [m for m in request.messages if m.role == "user"]
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message found")
@@ -80,12 +124,15 @@ async def chat_completions(request: ChatCompletionRequest):
     query_text = user_messages[-1].content
 
     client = await get_client()
-    try:
-        if request.stream:
-            # Streaming handled in next task
-            raise HTTPException(status_code=501, detail="Streaming not yet implemented")
 
-        # Non-streaming: use query() method
+    if request.stream:
+        return StreamingResponse(
+            stream_response(client, request.model, query_text, request),
+            media_type="text/event-stream"
+        )
+
+    # Non-streaming path (existing code)
+    try:
         result = await client.query(
             notebook_id=request.model,
             query_text=query_text,
