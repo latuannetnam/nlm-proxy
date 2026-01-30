@@ -44,3 +44,34 @@ class ChatCompletionChunk(BaseModel):
     model: str
     choices: list[Choice]
     system_fingerprint: str | None = None
+
+
+class ResponseMessage(BaseModel):
+    """Message in non-streaming response."""
+    role: str = "assistant"
+    content: str
+
+
+class ResponseChoice(BaseModel):
+    """Choice in non-streaming response."""
+    index: int = 0
+    message: ResponseMessage
+    finish_reason: str = "stop"
+
+
+class Usage(BaseModel):
+    """Token usage statistics."""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class ChatCompletionResponse(BaseModel):
+    """OpenAI-compatible non-streaming response."""
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: list[ResponseChoice]
+    usage: Usage
+    system_fingerprint: str | None = None

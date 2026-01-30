@@ -71,3 +71,26 @@ def test_chat_completion_chunk_final():
     )
 
     assert chunk.choices[0].finish_reason == "stop"
+
+
+def test_chat_completion_response_non_streaming():
+    from notebooklm_mcp.openai_types import (
+        ChatCompletionResponse, ResponseChoice, ResponseMessage, Usage
+    )
+
+    response = ChatCompletionResponse(
+        id="chatcmpl-123",
+        created=1700000000,
+        model="nb-uuid",
+        choices=[ResponseChoice(
+            index=0,
+            message=ResponseMessage(role="assistant", content="Hello!"),
+            finish_reason="stop"
+        )],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        system_fingerprint="conv_abc123"
+    )
+
+    data = response.model_dump()
+    assert data["object"] == "chat.completion"
+    assert data["choices"][0]["message"]["content"] == "Hello!"
