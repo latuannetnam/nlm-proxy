@@ -1,6 +1,7 @@
 # tests/test_openai_types.py
 import pytest
 from pydantic import ValidationError
+import json
 
 
 def test_message_valid_user_role():
@@ -40,3 +41,33 @@ def test_chat_completion_request_with_extras():
     assert req.stream is True
     assert req.conversation_id == "conv-456"
     assert req.include_thinking is True
+
+
+def test_chat_completion_chunk_serialization():
+    from notebooklm_mcp.openai_types import ChatCompletionChunk, Choice, DeltaContent
+
+    chunk = ChatCompletionChunk(
+        id="chatcmpl-123",
+        created=1700000000,
+        model="nb-uuid",
+        choices=[Choice(index=0, delta=DeltaContent(content="Hello"))],
+        system_fingerprint="conv_abc123"
+    )
+
+    data = json.loads(chunk.model_dump_json())
+    assert data["object"] == "chat.completion.chunk"
+    assert data["choices"][0]["delta"]["content"] == "Hello"
+    assert data["system_fingerprint"] == "conv_abc123"
+
+
+def test_chat_completion_chunk_final():
+    from notebooklm_mcp.openai_types import ChatCompletionChunk, Choice, DeltaContent
+
+    chunk = ChatCompletionChunk(
+        id="chatcmpl-123",
+        created=1700000000,
+        model="nb-uuid",
+        choices=[Choice(index=0, delta=DeltaContent(), finish_reason="stop")]
+    )
+
+    assert chunk.choices[0].finish_reason == "stop"

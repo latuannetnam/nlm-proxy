@@ -21,3 +21,26 @@ class ChatCompletionRequest(BaseModel):
     # Custom extensions
     conversation_id: str | None = None
     include_thinking: bool = False
+
+
+class DeltaContent(BaseModel):
+    """Delta content in streaming response."""
+    role: str | None = None
+    content: str | None = None
+
+
+class Choice(BaseModel):
+    """A single choice in chat completion response."""
+    index: int = 0
+    delta: DeltaContent
+    finish_reason: str | None = None
+
+
+class ChatCompletionChunk(BaseModel):
+    """OpenAI-compatible streaming chunk response."""
+    id: str
+    object: str = "chat.completion.chunk"
+    created: int
+    model: str
+    choices: list[Choice]
+    system_fingerprint: str | None = None
