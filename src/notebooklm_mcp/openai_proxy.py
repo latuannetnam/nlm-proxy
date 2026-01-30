@@ -165,3 +165,20 @@ async def embeddings():
         status_code=501,
         detail="Embeddings not supported. NotebookLM does not provide embedding generation."
     )
+
+
+def main():
+    """CLI entry point for OpenAI-compatible proxy."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="NotebookLM OpenAI-compatible proxy server")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8080, help="Port to listen on (default: 8080)")
+    args = parser.parse_args()
+
+    import uvicorn
+    uvicorn.run(app, host=args.host, port=args.port)
+
+
+if __name__ == "__main__":
+    main()

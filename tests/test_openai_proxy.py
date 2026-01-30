@@ -2,6 +2,8 @@
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch, MagicMock
+import subprocess
+import sys
 
 
 def test_health_endpoint():
@@ -105,3 +107,14 @@ def test_chat_completions_streaming():
         # Should have answer chunks (thinking filtered by default)
         assert len(chunks) >= 2  # At least 2 answer chunks + [DONE]
         assert "data: [DONE]" in response.text
+
+
+def test_cli_help():
+    result = subprocess.run(
+        [sys.executable, "-m", "notebooklm_mcp.openai_proxy", "--help"],
+        capture_output=True,
+        text=True
+    )
+    assert result.returncode == 0
+    assert "--port" in result.stdout
+    assert "--host" in result.stdout
