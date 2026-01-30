@@ -452,14 +452,14 @@ class Tools:
         is_native_mode = self._detect_function_calling_mode(__metadata__)
         
         # Warn about Native mode limitations
-        if is_native_mode and __event_emitter__:
-            await __event_emitter__({
-                "type": "notification",
-                "data": {
-                    "content": "⚠️ Native function calling mode detected. Streaming may be limited. "
-                               "Switch to Default mode for full real-time experience."
-                }
-            })
+        # if is_native_mode and __event_emitter__:
+        #     await __event_emitter__({
+        #         "type": "notification",
+        #         "data": {
+        #             "content": "⚠️ Native function calling mode detected. Streaming may be limited. "
+        #                        "Switch to Default mode for full real-time experience."
+        #         }
+        #     })
         
         try:
             # Initialize MCP client
@@ -473,7 +473,7 @@ class Tools:
                 await __event_emitter__({
                     "type": "status",
                     "data": {
-                        "description": "🔗 Connecting to MCP server...",
+                        "description": "🔗 Connecting to AI...",
                         "done": False
                     }
                 })
@@ -484,7 +484,7 @@ class Tools:
                 await __event_emitter__({
                     "type": "status",
                     "data": {
-                        "description": "📝 Sending query to NotebookLM...",
+                        "description": "📝 Sending query to AI...",
                         "done": False
                     }
                 })
@@ -494,10 +494,11 @@ class Tools:
             progress_count = 0
             final_conversation_id = conversation_id
             has_streamed_answer = False  # Track if we've streamed answer chunks
+            full_streamed_content = ""  # Track complete content for final replacement
             
             # Progress callback for streaming updates
             async def handle_progress(params: dict):
-                nonlocal progress_count, thinking_steps, answer_parts, has_streamed_answer
+                nonlocal progress_count, thinking_steps, answer_parts, has_streamed_answer, full_streamed_content
                 progress_count += 1
                 
                 message = params.get("message", "Processing...")
@@ -518,7 +519,8 @@ class Tools:
                 })
                 
                 # In Default mode, also stream content to message
-                if not is_native_mode:
+                # if not is_native_mode:
+                if True:
                     # Detect thinking vs answer based on emoji in message
                     if "🤔" in message:
                         # Extract thinking text
@@ -540,6 +542,7 @@ class Tools:
                         if answer_text:
                             # First answer chunk - add header
                             if not answer_parts:
+                                full_streamed_content += "**📝 Answer:**\n\n"
                                 await __event_emitter__({
                                     "type": "message",
                                     "data": {
@@ -561,6 +564,7 @@ class Tools:
                                 delta = answer_text[prev_len:] if len(answer_text) > prev_len else ""
                             
                             if delta:
+                                full_streamed_content += delta
                                 await __event_emitter__({
                                     "type": "message",
                                     "data": {
@@ -643,15 +647,29 @@ class Tools:
                 })
             
             # Format final response
-            # If we've already streamed the answer chunks, don't return the full answer again
-            # to avoid duplicate content in the UI
-            if has_streamed_answer and not is_native_mode:
-                # Return a completion marker to prevent the model from adding its own response
-                # The conversation ID is appended if available
-                completion_msg = "\n\n---\n*✅ Response complete.*"
+            # If we've already streamed the answer chunks, we need to handle differently
+            # to prevent the model from appending additional generated content
+            if has_streamed_answer and not is_native_mode and __event_emitter__:
+                # Add conversation ID footer if available
                 if final_conversation_id:
-                    completion_msg += f" *💬 Conversation ID: `{final_conversation_id}` (use for follow-ups)*"
-                return completion_msg
+                    full_streamed_content += f"\n\n---\n*💬 Conversation ID: `{final_conversation_id}` (use for follow-ups)*"
+                
+                # Add hidden end marker for the companion filter to detect
+                # This marker will be used by notebooklm_mcp_filter.py to strip
+                # any model-generated text that appears after it
+                full_streamed_content += "\n<!-- NOTEBOOKLM_STREAM_END -->"
+                
+                # Use "chat:message" to replace the entire message content with our streamed content
+                await __event_emitter__({
+                    "type": "chat:message",  # This REPLACES the entire message content
+                    "data": {
+                        "content": full_streamed_content
+                    }
+                })
+                
+                # Return a special signal that the system prompt should instruct the model to stop
+                # The model should be configured to NOT generate ANY text when it sees this return value
+                return "<<<STREAMING_COMPLETE_NO_RESPONSE_NEEDED>>>"
             
             response = final_answer or "No answer received from NotebookLM."
             

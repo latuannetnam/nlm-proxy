@@ -210,6 +210,21 @@ Verifies:
 2. Or save tokens manually via the server's `save_auth_tokens` tool
 3. Verify cookies are still valid at https://notebooklm.google.com
 
+### "Model adds extra text after tool response"
+
+In Default function calling mode, the model may generate additional text after the tool's streamed response completes. 
+
+**Solution:** Add a **Stop Sequence** to your model configuration
+
+1. Go to **Admin Panel** → **Settings** → **Models**
+2. Select your model → **Advanced Parameters**
+3. Add to **Stop Sequences**: `<<<STREAMING_COMPLETE_NO_RESPONSE_NEEDED>>>`
+4. Save
+
+This tells the model to stop generating when it sees the tool's completion marker.
+
+**Alternative:** Install the companion filter `notebooklm_mcp_filter.py` which strips any extra text in the `outlet` function.
+
 ## 🏗️ Architecture
 
 ```

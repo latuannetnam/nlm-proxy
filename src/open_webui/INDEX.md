@@ -10,7 +10,10 @@ This directory contains a **production-ready** Open WebUI tool that integrates N
 src/open_webui/
 │
 ├── 🎯 notebooklm_mcp_tool.py          # Main tool (copy this to Open WebUI)
-│   └── 748 lines, production-ready
+│   └── 900+ lines, production-ready
+│
+├── 🔧 notebooklm_mcp_filter.py        # Optional filter (alternative to stop sequence)
+│   └── Strips model-generated text after streaming
 │
 ├── 📚 Documentation
 │   ├── QUICKSTART.md                  # 5-minute setup guide
@@ -39,7 +42,13 @@ src/open_webui/
    - Configure Valves (server URL)
    - Set Function Calling mode to "Default"
 
-3. **Use It**
+3. **Configure Stop Sequence (Recommended)**
+   - Go to **Admin Panel** → **Settings** → **Models**
+   - Select your model → **Advanced Parameters**
+   - Add Stop Sequence: `<<<STREAMING_COMPLETE_NO_RESPONSE_NEEDED>>>`
+   - This prevents the model from adding extra text after streaming
+
+4. **Use It**
    ```
    @notebooklm List my notebooks
    @notebooklm Query notebook [id]: What are the findings?
