@@ -44,3 +44,33 @@ def test_models_list_returns_notebooks():
         assert len(data["data"]) == 2
         assert data["data"][0]["id"] == "nb-123"
         assert data["data"][0]["owned_by"] == "notebooklm"
+
+
+def test_chat_completions_non_streaming():
+    from notebooklm_mcp.openai_proxy import app
+
+    mock_query_result = {
+        "answer": "Based on your sources, the answer is 42.",
+        "conversation_id": "conv-789",
+        "turn_number": 1,
+        "is_follow_up": False,
+    }
+
+    with patch("notebooklm_mcp.openai_proxy.get_client") as mock_get_client:
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(return_value=mock_query_result)
+        mock_client.close = AsyncMock()
+        mock_get_client.return_value = mock_client
+
+        client = TestClient(app)
+        response = client.post("/v1/chat/completions", json={
+            "model": "nb-123",
+            "messages": [{"role": "user", "content": "What is the answer?"}],
+            "stream": False
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["object"] == "chat.completion"
+        assert data["choices"][0]["message"]["content"] == "Based on your sources, the answer is 42."
+        assert data["system_fingerprint"] == "conv_conv-789"

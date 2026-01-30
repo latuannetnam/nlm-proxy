@@ -1,9 +1,19 @@
 """OpenAI-compatible proxy server for NotebookLM."""
 
+import time
+import uuid
+
 from fastapi import FastAPI, HTTPException
 
 from .api_client import NotebookLMClient
 from .auth import load_cached_tokens
+from .openai_types import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ResponseChoice,
+    ResponseMessage,
+    Usage,
+)
 
 app = FastAPI(
     title="NotebookLM OpenAI Proxy",
@@ -55,6 +65,48 @@ async def list_models():
                 for nb in notebooks
             ]
         }
+    finally:
+        await client.close()
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
+    """OpenAI-compatible chat completions endpoint."""
+    # Extract last user message
+    user_messages = [m for m in request.messages if m.role == "user"]
+    if not user_messages:
+        raise HTTPException(status_code=400, detail="No user message found")
+
+    query_text = user_messages[-1].content
+
+    client = await get_client()
+    try:
+        if request.stream:
+            # Streaming handled in next task
+            raise HTTPException(status_code=501, detail="Streaming not yet implemented")
+
+        # Non-streaming: use query() method
+        result = await client.query(
+            notebook_id=request.model,
+            query_text=query_text,
+            conversation_id=request.conversation_id,
+        )
+
+        answer = result.get("answer", "") if result else ""
+        conv_id = result.get("conversation_id", "") if result else ""
+
+        return ChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+            created=int(time.time()),
+            model=request.model,
+            choices=[ResponseChoice(
+                index=0,
+                message=ResponseMessage(role="assistant", content=answer),
+                finish_reason="stop"
+            )],
+            usage=Usage(prompt_tokens=len(query_text), completion_tokens=len(answer), total_tokens=len(query_text) + len(answer)),
+            system_fingerprint=f"conv_{conv_id}" if conv_id else None
+        )
     finally:
         await client.close()
 
