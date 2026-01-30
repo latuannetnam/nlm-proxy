@@ -651,21 +651,21 @@ class Tools:
             # to prevent the model from appending additional generated content
             if has_streamed_answer and not is_native_mode and __event_emitter__:
                 # Add conversation ID footer if available
-                if final_conversation_id:
-                    full_streamed_content += f"\n\n---\n*💬 Conversation ID: `{final_conversation_id}` (use for follow-ups)*"
+                # if final_conversation_id:
+                #     full_streamed_content += f"\n\n---\n*💬 Conversation ID: `{final_conversation_id}` (use for follow-ups)*"
                 
                 # Add hidden end marker for the companion filter to detect
                 # This marker will be used by notebooklm_mcp_filter.py to strip
                 # any model-generated text that appears after it
-                full_streamed_content += "\n<!-- NOTEBOOKLM_STREAM_END -->"
+                # full_streamed_content += "\n<!-- NOTEBOOKLM_STREAM_END -->"
                 
                 # Use "chat:message" to replace the entire message content with our streamed content
-                await __event_emitter__({
-                    "type": "chat:message",  # This REPLACES the entire message content
-                    "data": {
-                        "content": full_streamed_content
-                    }
-                })
+                # await __event_emitter__({
+                #     "type": "chat:message",  # This REPLACES the entire message content
+                #     "data": {
+                #         "content": full_streamed_content
+                #     }
+                # })
                 
                 # Return a special signal that the system prompt should instruct the model to stop
                 # The model should be configured to NOT generate ANY text when it sees this return value
