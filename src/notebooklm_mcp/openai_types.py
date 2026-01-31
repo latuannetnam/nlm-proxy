@@ -20,13 +20,14 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: int | None = None
     # Custom extensions
     conversation_id: str | None = None
-    include_thinking: bool = False
+    include_thinking: bool = True
 
 
 class DeltaContent(BaseModel):
     """Delta content in streaming response."""
     role: str | None = None
     content: str | None = None
+    reasoning_content: str | None = None  # OpenAI o1/o3 style thinking
 
 
 class Choice(BaseModel):
@@ -50,6 +51,7 @@ class ResponseMessage(BaseModel):
     """Message in non-streaming response."""
     role: str = "assistant"
     content: str
+    reasoning_content: str | None = None  # OpenAI o1/o3 style thinking
 
 
 class ResponseChoice(BaseModel):

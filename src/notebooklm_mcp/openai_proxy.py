@@ -90,6 +90,10 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
     conversation_id = None
     chunk_count = 0
 
+    # Track previous text to compute deltas (NotebookLM sends cumulative text)
+    previous_thinking = ""
+    previous_answer = ""
+
     logger.debug(f"[NOTEBOOKLM] Starting stream query: notebook_id={notebook_id}, query={query_text[:100]}..., conversation_id={request.conversation_id}")
 
     try:
@@ -99,24 +103,46 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
             conversation_id=request.conversation_id
         ):
             chunk_count += 1
-            logger.debug(f"[NOTEBOOKLM] Received chunk #{chunk_count}: type={chunk.get('type')}, text_len={len(chunk.get('text', ''))}")
+            chunk_type = chunk.get("type")
+            full_text = chunk.get("text", "")
+
+            logger.debug(f"[NOTEBOOKLM] Received chunk #{chunk_count}: type={chunk_type}, text_len={len(full_text)}")
 
             # Filter thinking unless requested
-            if chunk["type"] == "thinking" and not request.include_thinking:
+            if chunk_type == "thinking" and not request.include_thinking:
                 logger.debug(f"[PROXY] Filtering thinking chunk (include_thinking={request.include_thinking})")
+                previous_thinking = full_text  # Still track it for delta computation
                 continue
 
             conversation_id = chunk.get("conversation_id", conversation_id)
 
-            openai_chunk = ChatCompletionChunk(
-                id=chunk_id,
-                created=created,
-                model=notebook_id,
-                choices=[Choice(delta=DeltaContent(content=chunk["text"]))],
-                system_fingerprint=f"conv_{conversation_id}" if conversation_id else None
-            )
-            logger.debug(f"[PROXY] Yielding OpenAI chunk with {len(chunk['text'])} chars")
-            yield f"data: {openai_chunk.model_dump_json()}\n\n"
+            # Compute delta: NotebookLM sends cumulative text, we need only the new part
+            if chunk_type == "thinking":
+                delta_text = full_text[len(previous_thinking):]
+                previous_thinking = full_text
+            else:  # answer
+                delta_text = full_text[len(previous_answer):]
+                previous_answer = full_text
+
+            logger.debug(f"[PROXY] Delta text length: {len(delta_text)} chars (full={len(full_text)}, previous={len(previous_answer if chunk_type == 'answer' else previous_thinking)})")
+
+            # Only yield if there's new content
+            if delta_text:
+                # Send thinking as reasoning_content, answers as content (OpenAI o1/o3 format)
+                if chunk_type == "thinking":
+                    delta = DeltaContent(reasoning_content=delta_text)
+                else:  # answer
+                    delta = DeltaContent(content=delta_text)
+
+                openai_chunk = ChatCompletionChunk(
+                    id=chunk_id,
+                    created=created,
+                    model=notebook_id,
+                    choices=[Choice(delta=delta)],
+                    system_fingerprint=f"conv_{conversation_id}" if conversation_id else None
+                )
+                logger.debug(f"[PROXY] Yielding OpenAI chunk with {len(delta_text)} chars (type={chunk_type})")
+                yield f"data: {openai_chunk.model_dump_json()}\n\n"
 
         # Final chunk with finish_reason
         logger.debug(f"[NOTEBOOKLM] Stream complete: {chunk_count} total chunks, conversation_id={conversation_id}")
