@@ -8,10 +8,10 @@ import uuid
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .api_client import NotebookLMClient
-from .auth import load_cached_tokens
-from .session_store import SessionStore
-from .openai_types import (
+from nlm_proxy.core import NotebookLMClient
+from nlm_proxy.core.auth import load_cached_tokens
+from nlm_proxy.openai.session import SessionStore
+from nlm_proxy.openai.types import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionChunk,
@@ -309,20 +309,11 @@ async def session_stats():
     return app.state.session_store.get_stats()
 
 
-def main():
-    """CLI entry point for OpenAI-compatible proxy."""
-    import argparse
-
-    parser = argparse.ArgumentParser(description="NotebookLM OpenAI-compatible proxy server")
-    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=8080, help="Port to listen on (default: 8080)")
-    parser.add_argument("--session-ttl", type=int, default=86400,
-                        help="Session expiration time in seconds (default: 86400 = 24 hours)")
-    args = parser.parse_args()
-
+def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
+    """Run the OpenAI-compatible proxy server."""
     # Initialize session store with configured TTL
-    app.state.session_store = SessionStore(ttl_seconds=args.session_ttl)
-    logger.info(f"[SESSION] Session store initialized with TTL={args.session_ttl}s ({args.session_ttl/3600:.1f} hours)")
+    app.state.session_store = SessionStore(ttl_seconds=session_ttl)
+    logger.info(f"[SESSION] Session store initialized with TTL={session_ttl}s ({session_ttl/3600:.1f} hours)")
 
     import uvicorn
     import logging
@@ -332,7 +323,7 @@ def main():
     )
 
     try:
-        uvicorn.run(app, host=args.host, port=args.port)
+        uvicorn.run(app, host=host, port=port)
     finally:
         # Cleanup session store on shutdown
         if app.state.session_store:

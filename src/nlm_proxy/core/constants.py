@@ -14,8 +14,8 @@ T = TypeVar("T")
 class CodeMapper:
     """
     Bidirectional mapping for API codes.
-    
-    Handles strict validation, normalization (case-insensitivity), and 
+
+    Handles strict validation, normalization (case-insensitivity), and
     human-readable error messages.
     """
 
@@ -31,19 +31,19 @@ class CodeMapper:
     def get_code(self, name: str) -> int:
         """
         Get integer code for a string name.
-        
+
         Args:
             name: The string name (case-insensitive).
-            
+
         Returns:
             The corresponding integer code.
-            
+
         Raises:
             ValueError: If the name is unknown.
         """
         if not name:
             raise ValueError(f"Invalid name: '{name}'. Must be one of: {self.options_str}")
-            
+
         code = self._name_to_code.get(name.lower())
         if code is None:
             raise ValueError(f"Unknown name '{name}'. Must be one of: {self.options_str}")
@@ -52,10 +52,10 @@ class CodeMapper:
     def get_name(self, code: int | None) -> str:
         """
         Get string name for an integer code.
-        
+
         Args:
             code: The integer code.
-            
+
         Returns:
             The corresponding string name, or the 'unknown_label' if not found.
         """

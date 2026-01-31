@@ -160,6 +160,7 @@ async def create_and_call_tool(
     return await client.call_tool(http_client, tool_name, arguments)
 
 
+@pytest.mark.mcp
 class TestBasicConcurrency:
     """Test basic concurrent request handling."""
 
@@ -261,6 +262,7 @@ class TestBasicConcurrency:
             print(f"\n[PASS] 3 concurrent mixed tool calls completed in {elapsed:.2f}s")
 
 
+@pytest.mark.mcp
 class TestPerformanceBenchmarks:
     """Performance benchmarks comparing sequential vs concurrent execution."""
 
@@ -362,6 +364,7 @@ class TestPerformanceBenchmarks:
             print(f"[PASS] Load test passed: {success_rate:.1%} success rate")
 
 
+@pytest.mark.mcp
 class TestConcurrentStateProtection:
     """Test that shared state is properly protected under concurrent access."""
 
@@ -459,6 +462,7 @@ class TestConcurrentStateProtection:
 
 
 # Performance metrics collection
+@pytest.mark.mcp
 class TestPerformanceMetrics:
     """Collect and report detailed performance metrics."""
 

@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
-"""CLI tool to authenticate with NotebookLM MCP.
+"""CLI tool to authenticate with NotebookLM.
 
 This tool connects to Chrome via DevTools Protocol, navigates to NotebookLM,
 and extracts authentication tokens. If the user is not logged in, it waits
 for them to log in via the Chrome window.
 
 Usage:
-    1. Start Chrome with remote debugging:
-       /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222
+    1. Run this tool:
+       nlm-proxy auth extract
 
-    2. Or, if Chrome is already running, it may already have debugging enabled.
+    2. If not logged in, log in via the Chrome window
 
-    3. Run this tool:
-       notebooklm-mcp-auth
-
-    4. If not logged in, log in via the Chrome window
-
-    5. Tokens are cached to ~/.notebooklm-mcp/auth.json
+    3. Tokens are cached to ~/.notebooklm-mcp/auth.json
 """
 
 import json
@@ -103,7 +98,7 @@ def launch_chrome(port: int, headless: bool = False) -> "subprocess.Popen | None
         f"--remote-debugging-port={port}",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-extensions",  # Bypass extensions that may interfere (e.g., Antigravity IDE)
+        "--disable-extensions",  # Bypass extensions that may interfere
         f"--user-data-dir={profile_dir}",  # Persistent profile for login persistence
         "--remote-allow-origins=*",  # Allow WebSocket connections from any origin
     ]
@@ -315,7 +310,7 @@ def is_our_chrome_profile_in_use() -> bool:
 
 def has_chrome_profile() -> bool:
     """Check if a Chrome profile with saved login exists.
-    
+
     Returns True if the profile directory exists and has login cookies,
     indicating that the user has previously authenticated.
     """
@@ -327,34 +322,34 @@ def has_chrome_profile() -> bool:
 
 def run_headless_auth(port: int = 9223, timeout: int = 30) -> AuthTokens | None:
     """Run authentication in headless mode (no user interaction).
-    
+
     This only works if the Chrome profile already has saved Google login.
     The Chrome process is automatically terminated after token extraction.
-    
+
     Args:
         port: Chrome DevTools port (use different port to avoid conflicts)
         timeout: Maximum time to wait for auth extraction
-        
+
     Returns:
         AuthTokens if successful, None if failed or no saved login
     """
     import subprocess
-    
+
     # Check if profile exists with saved login
     if not has_chrome_profile():
         return None
-    
+
     # Check if our profile is already in use
     if is_our_chrome_profile_in_use():
         return None
-    
+
     chrome_process: subprocess.Popen | None = None
     try:
         # Launch Chrome in headless mode
         chrome_process = launch_chrome(port, headless=True)
         if not chrome_process:
             return None
-        
+
         # Wait for Chrome debugger to be ready
         debugger_url = None
         for _ in range(5):  # Try up to 5 times
@@ -362,37 +357,37 @@ def run_headless_auth(port: int = 9223, timeout: int = 30) -> AuthTokens | None:
             if debugger_url:
                 break
             time.sleep(1)
-        
+
         if not debugger_url:
             return None
-        
+
         # Find or create NotebookLM page
         page = find_or_create_notebooklm_page(port)
         if not page:
             return None
-        
+
         ws_url = page.get("webSocketDebuggerUrl")
         if not ws_url:
             return None
-        
+
         # Check if logged in by URL
         current_url = get_current_url(ws_url)
         if not check_if_logged_in_by_url(current_url):
             # Not logged in - headless can't help
             return None
-        
+
         # Extract cookies
         cookies_list = get_page_cookies(ws_url)
         cookies = {c["name"]: c["value"] for c in cookies_list}
-        
+
         if not validate_cookies(cookies):
             return None
-        
+
         # Get page HTML for CSRF extraction
         html = get_page_html(ws_url)
         csrf_token = extract_csrf_from_page_source(html)
         session_id = extract_session_id_from_html(html)
-        
+
         # Create and save tokens
         tokens = AuthTokens(
             cookies=cookies,
@@ -401,12 +396,12 @@ def run_headless_auth(port: int = 9223, timeout: int = 30) -> AuthTokens | None:
             extracted_at=time.time(),
         )
         save_tokens_to_cache(tokens)
-        
+
         return tokens
-        
+
     except Exception:
         return None
-        
+
     finally:
         # IMPORTANT: Always terminate headless Chrome
         if chrome_process:
@@ -421,7 +416,6 @@ def run_headless_auth(port: int = 9223, timeout: int = 30) -> AuthTokens | None:
                     pass
 
 
-
 def run_auth_flow(port: int = CDP_DEFAULT_PORT, auto_launch: bool = True) -> AuthTokens | None:
     """Run the authentication flow.
 
@@ -429,13 +423,13 @@ def run_auth_flow(port: int = CDP_DEFAULT_PORT, auto_launch: bool = True) -> Aut
         port: Chrome DevTools port
         auto_launch: If True, automatically launch Chrome if not running
     """
-    print("NotebookLM MCP Authentication")
+    print("NotebookLM Authentication")
     print("=" * 40)
     print()
 
     # Track Chrome process so we can close it after auth
     chrome_process = None
-    
+
     # Check if Chrome is running with debugging
     debugger_url = get_chrome_debugger_url(port)
 
@@ -447,7 +441,7 @@ def run_auth_flow(port: int = CDP_DEFAULT_PORT, auto_launch: bool = True) -> Aut
             print("This means a previous auth Chrome window is still open.")
             print("Close that window and try again, or use file mode:")
             print()
-            print("  notebooklm-mcp-auth --file")
+            print("  nlm-proxy auth extract --file")
             print()
             return None
 
@@ -469,7 +463,7 @@ def run_auth_flow(port: int = CDP_DEFAULT_PORT, auto_launch: bool = True) -> Aut
         print("  - Firewall is blocking the port")
         print()
         print("TRY: Use file mode instead (most reliable):")
-        print("     notebooklm-mcp-auth --file")
+        print("     nlm-proxy auth extract --file")
         print()
         return None
 
@@ -574,22 +568,7 @@ def run_auth_flow(port: int = CDP_DEFAULT_PORT, auto_launch: bool = True) -> Aut
     print()
     print(f"Tokens cached to: {get_cache_path()}")
     print()
-    print("NEXT STEPS:")
-    print()
-    print("  1. Add the MCP to your AI tool (if not already done):")
-    print()
-    print("     Claude Code:")
-    print("       claude mcp add notebooklm-mcp -- notebooklm-mcp")
-    print()
-    print("     Gemini CLI:")
-    print("       gemini mcp add notebooklm notebooklm-mcp")
-    print()
-    print("     Or add to settings.json manually:")
-    print('       "notebooklm-mcp": { "command": "notebooklm-mcp" }')
-    print()
-    print("  2. Restart your AI assistant")
-    print()
-    print("  3. Test by asking: 'List my NotebookLM notebooks'")
+    print("You can now use: nlm-proxy auth test")
     print()
 
     # Close Chrome if we launched it - this unlocks the profile for headless auth
@@ -618,7 +597,7 @@ def run_file_cookie_entry(cookie_file: str | None = None) -> AuthTokens | None:
         cookie_file: Optional path to file. If not provided, shows instructions
                      and prompts for the path.
     """
-    print("NotebookLM MCP - Cookie File Import")
+    print("NotebookLM - Cookie File Import")
     print("=" * 50)
     print()
 
@@ -636,11 +615,8 @@ def run_file_cookie_entry(cookie_file: str | None = None) -> AuthTokens | None:
         print("  8. In the right panel, find 'Request Headers'")
         print("  9. Find the line starting with 'cookie:'")
         print(" 10. Right-click the cookie VALUE and select 'Copy value'")
-        print(" 11. Edit the 'cookies.txt' file in this repo (or create a new file)")
+        print(" 11. Create a file (e.g., cookies.txt)")
         print(" 12. Paste the cookie string and save")
-        print()
-        print("TIP: If running from the repo directory, just edit 'cookies.txt'")
-        print("     and enter: cookies.txt")
         print()
         print("-" * 50)
         print()
@@ -729,110 +705,7 @@ def run_file_cookie_entry(cookie_file: str | None = None) -> AuthTokens | None:
     print(f"Cookies saved: {len(cookies)} cookies")
     print(f"Cache location: {get_cache_path()}")
     print()
-    print("NEXT STEPS:")
-    print()
-    print("  1. Add the MCP to your AI tool (if not already done):")
-    print()
-    print("     Claude Code:")
-    print("       claude mcp add notebooklm-mcp -- notebooklm-mcp")
-    print()
-    print("     Gemini CLI:")
-    print("       gemini mcp add notebooklm notebooklm-mcp")
-    print()
-    print("     Or add to settings.json manually:")
-    print('       "notebooklm-mcp": { "command": "notebooklm-mcp" }')
-    print()
-    print("  2. Restart your AI assistant")
-    print()
-    print("  3. Test by asking: 'List my NotebookLM notebooks'")
+    print("You can now use: nlm-proxy auth test")
     print()
 
     return tokens
-
-
-def main():
-    """Main entry point."""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Authenticate with NotebookLM MCP",
-        epilog="""
-This tool extracts authentication tokens from Chrome for use with the NotebookLM MCP.
-
-TWO MODES:
-
-1. FILE MODE (--file): Import cookies from a file (RECOMMENDED)
-   - Shows step-by-step instructions for extracting cookies
-   - Prompts you for the file path after you save the cookies
-   - No Chrome remote debugging required
-
-2. AUTO MODE (default): Automatic extraction via Chrome DevTools
-   - Requires closing Chrome first
-   - Launches Chrome and extracts cookies automatically
-   - May not work on all systems
-
-EXAMPLES:
-  notebooklm-mcp-auth --file               # Guided file import (recommended)
-  notebooklm-mcp-auth --file ~/cookies.txt # Direct file import
-  notebooklm-mcp-auth                      # Auto mode (close Chrome first)
-
-After authentication, start the MCP server with: notebooklm-mcp
-        """
-    )
-    parser.add_argument(
-        "--file",
-        nargs="?",
-        const="",  # When --file is used without argument, set to empty string
-        metavar="PATH",
-        help="Import cookies from file (recommended). Shows instructions if no path given."
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=CDP_DEFAULT_PORT,
-        help=f"Chrome DevTools port (default: {CDP_DEFAULT_PORT})"
-    )
-    parser.add_argument(
-        "--show-tokens",
-        action="store_true",
-        help="Show cached tokens (for debugging)"
-    )
-    parser.add_argument(
-        "--no-auto-launch",
-        action="store_true",
-        help="Don't automatically launch Chrome (requires Chrome to be running with debugging)"
-    )
-
-    args = parser.parse_args()
-
-    if args.show_tokens:
-        cache_path = get_cache_path()
-        if cache_path.exists():
-            with open(cache_path) as f:
-                data = json.load(f)
-            print(json.dumps(data, indent=2))
-        else:
-            print("No cached tokens found.")
-        return 0
-
-    try:
-        if args.file is not None:  # --file was used (with or without path)
-            # File-based cookie import
-            tokens = run_file_cookie_entry(cookie_file=args.file if args.file else None)
-        else:
-            # Automatic extraction via Chrome DevTools
-            tokens = run_auth_flow(args.port, auto_launch=not args.no_auto_launch)
-
-        return 0 if tokens else 1
-    except KeyboardInterrupt:
-        print("\nCancelled.")
-        return 1
-    except Exception as e:
-        print(f"ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())

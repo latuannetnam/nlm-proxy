@@ -2,7 +2,7 @@ import pytest
 import json
 from unittest.mock import MagicMock, patch, AsyncMock
 import httpx
-from notebooklm_mcp.api_client import NotebookLMClient, AuthenticationError
+from nlm_proxy.core import NotebookLMClient, AuthenticationError
 
 
 @pytest.fixture
@@ -13,6 +13,7 @@ def mock_client():
         return client
 
 
+@pytest.mark.mcp
 class TestNotebookLMClientAuth:
     """Test authentication and retry logic."""
 
@@ -206,7 +207,7 @@ class TestNotebookLMClientAuth:
     @pytest.mark.asyncio
     async def test_add_drive_source_uses_extended_timeout(self, mock_client):
         """Test that add_drive_source uses extended timeout (120s) for large files."""
-        from notebooklm_mcp.api_client import SOURCE_ADD_TIMEOUT
+        from nlm_proxy.core import SOURCE_ADD_TIMEOUT
 
         with patch.object(mock_client, '_get_client', new_callable=AsyncMock) as mock_get_client, \
              patch.object(mock_client, '_parse_response') as mock_parse, \
@@ -231,7 +232,7 @@ class TestNotebookLMClientAuth:
     @pytest.mark.asyncio
     async def test_add_drive_source_timeout_returns_status(self, mock_client):
         """Test that add_drive_source returns timeout status on timeout exception."""
-        from notebooklm_mcp.api_client import SOURCE_ADD_TIMEOUT
+        from nlm_proxy.core import SOURCE_ADD_TIMEOUT
 
         with patch.object(mock_client, '_get_client', new_callable=AsyncMock) as mock_get_client:
             http_client = MagicMock(spec=httpx.AsyncClient)

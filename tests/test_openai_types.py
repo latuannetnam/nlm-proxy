@@ -4,21 +4,24 @@ from pydantic import ValidationError
 import json
 
 
+@pytest.mark.openai
 def test_message_valid_user_role():
-    from notebooklm_mcp.openai_types import Message
+    from nlm_proxy.openai.types import Message
     msg = Message(role="user", content="Hello")
     assert msg.role == "user"
     assert msg.content == "Hello"
 
 
+@pytest.mark.openai
 def test_message_invalid_role_rejected():
-    from notebooklm_mcp.openai_types import Message
+    from nlm_proxy.openai.types import Message
     with pytest.raises(ValidationError):
         Message(role="invalid", content="Hello")
 
 
+@pytest.mark.openai
 def test_chat_completion_request_minimal():
-    from notebooklm_mcp.openai_types import ChatCompletionRequest, Message
+    from nlm_proxy.openai.types import ChatCompletionRequest, Message
     req = ChatCompletionRequest(
         model="notebook-uuid",
         messages=[Message(role="user", content="Hello")]
@@ -29,8 +32,9 @@ def test_chat_completion_request_minimal():
     assert req.include_thinking is False
 
 
+@pytest.mark.openai
 def test_chat_completion_request_with_extras():
-    from notebooklm_mcp.openai_types import ChatCompletionRequest, Message
+    from nlm_proxy.openai.types import ChatCompletionRequest, Message
     req = ChatCompletionRequest(
         model="nb-123",
         messages=[Message(role="user", content="Hi")],
@@ -43,8 +47,9 @@ def test_chat_completion_request_with_extras():
     assert req.include_thinking is True
 
 
+@pytest.mark.openai
 def test_chat_completion_chunk_serialization():
-    from notebooklm_mcp.openai_types import ChatCompletionChunk, Choice, DeltaContent
+    from nlm_proxy.openai.types import ChatCompletionChunk, Choice, DeltaContent
 
     chunk = ChatCompletionChunk(
         id="chatcmpl-123",
@@ -60,8 +65,9 @@ def test_chat_completion_chunk_serialization():
     assert data["system_fingerprint"] == "conv_abc123"
 
 
+@pytest.mark.openai
 def test_chat_completion_chunk_final():
-    from notebooklm_mcp.openai_types import ChatCompletionChunk, Choice, DeltaContent
+    from nlm_proxy.openai.types import ChatCompletionChunk, Choice, DeltaContent
 
     chunk = ChatCompletionChunk(
         id="chatcmpl-123",
@@ -73,8 +79,9 @@ def test_chat_completion_chunk_final():
     assert chunk.choices[0].finish_reason == "stop"
 
 
+@pytest.mark.openai
 def test_chat_completion_response_non_streaming():
-    from notebooklm_mcp.openai_types import (
+    from nlm_proxy.openai.types import (
         ChatCompletionResponse, ResponseChoice, ResponseMessage, Usage
     )
 

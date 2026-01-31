@@ -11,20 +11,29 @@ Tested with personal/free tier accounts. May work with Google Workspace accounts
 ## Development Commands
 
 ```bash
-# Install dependencies
-uv tool install .
+# Install dependencies (with all extras for full functionality)
+uv pip install -e ".[all]"
+
+# Install as global tool (with all extras)
+uv tool install ".[all]"
 
 # Reinstall after code changes (ALWAYS clean cache first)
-uv cache clean && uv tool install --force .
+uv cache clean && uv tool install ".[all]" --force
 
 # Run the MCP server (stdio)
-notebooklm-mcp
+nlm-proxy serve mcp
 
 # Run with Debug logging
-notebooklm-mcp --debug
+nlm-proxy serve mcp --debug
 
 # Run as HTTP server
-notebooklm-mcp --transport http --port 8000
+nlm-proxy serve mcp --transport http --port 8000
+
+# Run OpenAI proxy
+nlm-proxy serve openai --port 8080
+
+# Test authentication
+nlm-proxy auth test
 
 # Run tests
 uv run pytest
@@ -33,13 +42,119 @@ uv run pytest
 uv run pytest tests/test_file.py::test_function -v
 ```
 
+### Running from Source (Direct Python Import)
+
+If the CLI has caching issues, use direct Python imports:
+
+```bash
+# Run MCP server
+uv run python -m nlm_proxy serve mcp
+
+# Run MCP server with debug
+uv run python -m nlm_proxy serve mcp --debug
+
+# Run MCP server as HTTP
+uv run python -m nlm_proxy serve mcp --transport http --port 8000
+
+# Run OpenAI proxy
+uv run python -m nlm_proxy serve openai --port 8080
+
+# Run OpenAI proxy with custom settings
+uv run python -m nlm_proxy serve openai --host 127.0.0.1 --port 9999 --session-ttl 3600
+
+# Test authentication
+uv run python -m nlm_proxy auth test
+```
+
+**Alternative: Direct Python function calls (bypasses CLI entirely):**
+
+```bash
+# Run MCP server
+uv run python -c "from nlm_proxy.mcp import run_server; run_server()"
+
+# Run MCP server with debug
+uv run python -c "from nlm_proxy.mcp import run_server; run_server(debug=True)"
+
+# Run MCP server as HTTP
+uv run python -c "from nlm_proxy.mcp import run_server; run_server(transport='http', port=8000)"
+
+# Run OpenAI proxy
+uv run python -c "from nlm_proxy.openai import run_server; run_server(port=8080)"
+
+# Run OpenAI proxy with custom settings
+uv run python -c "from nlm_proxy.openai import run_server; run_server(host='127.0.0.1', port=9999, session_ttl=3600)"
+```
+
 **Python requirement:** >=3.11
 
-## Authentication (SIMPLIFIED!)
+## Authentication
 
-**You only need to provide COOKIES!** The CSRF token and session ID are now **automatically extracted** when needed.
+Multiple authentication methods are available, from fully automated to manual.
 
-### Method 1: Chrome DevTools MCP (Recommended)
+### Method 1: Automated CLI (Recommended)
+
+Fully automated token extraction using Chrome DevTools Protocol:
+
+```bash
+# Automatic extraction (launches Chrome automatically)
+nlm-proxy auth extract
+
+# Or with uv run (from source)
+uv run nlm-proxy auth extract
+
+# First time: You'll be prompted to log in to Google
+# Subsequent times: Uses saved profile (headless, instant!)
+```
+
+**How it works:**
+- Launches Chrome with remote debugging on port 9222
+- Navigates to NotebookLM
+- Waits for you to log in (first time only)
+- Automatically extracts cookies, CSRF token, and session ID
+- Saves Chrome profile to `~/.notebooklm-mcp/chrome-profile`
+- Future authentications can run headless using saved profile
+
+**Advanced options:**
+
+```bash
+# Custom Chrome DevTools port
+nlm-proxy auth extract --port 9223
+
+# Use existing Chrome instance (requires --remote-debugging-port=9222)
+nlm-proxy auth extract --no-auto-launch
+
+# File-based import (manual extraction)
+nlm-proxy auth extract --file
+nlm-proxy auth extract --file ~/cookies.txt
+```
+
+### Method 2: File-Based Import
+
+Manual cookie extraction from Chrome DevTools (most reliable when automation fails):
+
+```bash
+# Shows step-by-step instructions and prompts for file path
+nlm-proxy auth extract --file
+
+# Direct file import
+nlm-proxy auth extract --file ~/cookies.txt
+```
+
+**Manual extraction steps:**
+1. Open Chrome and go to https://notebooklm.google.com
+2. Log in to your Google account
+3. Press F12 (or Cmd+Option+I on Mac) to open DevTools
+4. Go to the Network tab
+5. Type "batchexecute" in the filter box
+6. Click on any notebook to trigger a request
+7. Click on a "batchexecute" request in the list
+8. Find "Request Headers" section
+9. Find the line starting with "cookie:"
+10. Right-click the cookie VALUE and select "Copy value"
+11. Save to a text file
+12. Run `nlm-proxy auth extract --file ~/path/to/cookies.txt`
+
+### Method 3: Chrome DevTools MCP (For AI Assistants)
 
 **Option A - Fast (Recommended):**
 Extract CSRF token and session ID directly from network request - **no page fetch needed!**
@@ -66,7 +181,7 @@ Save only cookies, tokens extracted from page on first API call
 save_auth_tokens(cookies=<cookie_header>)
 ```
 
-### Method 2: Environment Variables
+### Method 4: Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -74,29 +189,50 @@ save_auth_tokens(cookies=<cookie_header>)
 | `NOTEBOOKLM_CSRF_TOKEN` | No | (DEPRECATED - auto-extracted) |
 | `NOTEBOOKLM_SESSION_ID` | No | (DEPRECATED - auto-extracted) |
 
+**Note:** CSRF token and session ID are now automatically extracted when needed, so you only need to provide cookies.
+
+### Testing Authentication
+
+```bash
+nlm-proxy auth test
+
+# Or with uv run (from source)
+uv run nlm-proxy auth test
+```
+
 ### Token Expiration
 
 - **Cookies**: Stable for weeks, but some rotate on each request
 - **CSRF token**: Auto-refreshed on each client initialization
 - **Session ID**: Auto-refreshed on each client initialization
+- **Chrome profile**: Persists Google login for headless re-authentication
 
-When API calls fail with auth errors, re-extract fresh cookies from Chrome DevTools.
+When API calls fail with auth errors, re-extract fresh cookies using any of the methods above.
 
 ## Architecture
 
 ```
-src/notebooklm_mcp/
+src/nlm_proxy/
 ├── __init__.py      # Package version
-├── server.py        # FastMCP server with tool definitions
-├── api_client.py    # Internal API client
-├── constants.py     # Code-name mappings (CodeMapper class)
-├── auth.py          # Token caching and validation
-└── auth_cli.py      # CLI for Chrome-based auth (notebooklm-mcp-auth)
+├── cli.py           # Unified CLI entry point
+├── core/
+│   ├── __init__.py  # Public exports
+│   ├── client.py    # NotebookLMClient
+│   ├── auth.py      # Token management
+│   ├── constants.py # Code mappings
+│   └── exceptions.py # Custom exceptions
+├── mcp/
+│   ├── __init__.py  # Lazy imports
+│   └── server.py    # FastMCP tools
+└── openai/
+    ├── __init__.py  # Lazy imports
+    ├── server.py    # FastAPI routes
+    ├── session.py   # Session management
+    └── types.py     # Pydantic models
 ```
 
 **Executables:**
-- `notebooklm-mcp` - The MCP server
-- `notebooklm-mcp-auth` - CLI for extracting tokens (requires closing Chrome)
+- `nlm-proxy` - Unified CLI (serve mcp, serve openai, auth commands)
 
 ## MCP Tools Provided
 
@@ -213,13 +349,13 @@ An OpenAI-compatible proxy server that allows connecting any OpenAI client to No
 
 ```bash
 # Start the proxy server (default: 24-hour session TTL)
-notebooklm-openai --port 8080
+nlm-proxy serve openai --port 8080
 
 # With custom session expiration (1 hour)
-notebooklm-openai --port 8080 --session-ttl 3600
+nlm-proxy serve openai --port 8080 --session-ttl 3600
 
 # With custom host
-notebooklm-openai --host 127.0.0.1 --port 8000
+nlm-proxy serve openai --host 127.0.0.1 --port 8000
 ```
 
 **CLI Options:**

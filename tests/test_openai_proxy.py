@@ -6,32 +6,35 @@ import subprocess
 import sys
 
 
+@pytest.mark.openai
 def test_health_endpoint():
-    from notebooklm_mcp.openai_proxy import app
+    from nlm_proxy.openai.server import app
     client = TestClient(app)
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
+@pytest.mark.openai
 def test_embeddings_returns_501():
-    from notebooklm_mcp.openai_proxy import app
+    from nlm_proxy.openai.server import app
     client = TestClient(app)
     response = client.post("/v1/embeddings", json={"input": "test", "model": "x"})
     assert response.status_code == 501
     assert "not supported" in response.json()["detail"].lower()
 
 
+@pytest.mark.openai
 def test_models_list_returns_notebooks():
-    from notebooklm_mcp.openai_proxy import app
-    from notebooklm_mcp.api_client import Notebook
+    from nlm_proxy.openai.server import app
+    from nlm_proxy.core import Notebook
 
     mock_notebooks = [
         Notebook(id="nb-123", title="Research Notes", source_count=3, sources=[]),
         Notebook(id="nb-456", title="Project Docs", source_count=1, sources=[]),
     ]
 
-    with patch("notebooklm_mcp.openai_proxy.get_client") as mock_get_client:
+    with patch("nlm_proxy.openai.server.get_client") as mock_get_client:
         mock_client = MagicMock()
         mock_client.list_notebooks = AsyncMock(return_value=mock_notebooks)
         mock_client.close = AsyncMock()
@@ -48,8 +51,9 @@ def test_models_list_returns_notebooks():
         assert data["data"][0]["owned_by"] == "notebooklm"
 
 
+@pytest.mark.openai
 def test_chat_completions_non_streaming():
-    from notebooklm_mcp.openai_proxy import app
+    from nlm_proxy.openai.server import app
 
     mock_query_result = {
         "answer": "Based on your sources, the answer is 42.",
@@ -58,7 +62,7 @@ def test_chat_completions_non_streaming():
         "is_follow_up": False,
     }
 
-    with patch("notebooklm_mcp.openai_proxy.get_client") as mock_get_client:
+    with patch("nlm_proxy.openai.server.get_client") as mock_get_client:
         mock_client = MagicMock()
         mock_client.query = AsyncMock(return_value=mock_query_result)
         mock_client.close = AsyncMock()
@@ -78,15 +82,16 @@ def test_chat_completions_non_streaming():
         assert data["system_fingerprint"] == "conv_conv-789"
 
 
+@pytest.mark.openai
 def test_chat_completions_streaming():
-    from notebooklm_mcp.openai_proxy import app
+    from nlm_proxy.openai.server import app
 
     async def mock_stream():
         yield {"type": "thinking", "text": "Reading sources...", "conversation_id": "conv-123"}
         yield {"type": "answer", "text": "The answer is ", "conversation_id": "conv-123"}
         yield {"type": "answer", "text": "42.", "conversation_id": "conv-123"}
 
-    with patch("notebooklm_mcp.openai_proxy.get_client") as mock_get_client:
+    with patch("nlm_proxy.openai.server.get_client") as mock_get_client:
         mock_client = MagicMock()
         mock_client.query_stream = MagicMock(return_value=mock_stream())
         mock_client.close = AsyncMock()
@@ -109,14 +114,15 @@ def test_chat_completions_streaming():
         assert "data: [DONE]" in response.text
 
 
+@pytest.mark.openai
 def test_chat_completions_streaming_with_thinking():
-    from notebooklm_mcp.openai_proxy import app
+    from nlm_proxy.openai.server import app
 
     async def mock_stream():
         yield {"type": "thinking", "text": "Reading sources...", "conversation_id": "conv-123"}
         yield {"type": "answer", "text": "42", "conversation_id": "conv-123"}
 
-    with patch("notebooklm_mcp.openai_proxy.get_client") as mock_get_client:
+    with patch("nlm_proxy.openai.server.get_client") as mock_get_client:
         mock_client = MagicMock()
         mock_client.query_stream = MagicMock(return_value=mock_stream())
         mock_client.close = AsyncMock()
@@ -135,9 +141,10 @@ def test_chat_completions_streaming_with_thinking():
         assert "Reading sources" in response.text
 
 
+@pytest.mark.openai
 def test_cli_help():
     result = subprocess.run(
-        [sys.executable, "-m", "notebooklm_mcp.openai_proxy", "--help"],
+        [sys.executable, "-m", "nlm_proxy.openai.server", "--help"],
         capture_output=True,
         text=True
     )

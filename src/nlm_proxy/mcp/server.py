@@ -12,12 +12,12 @@ from fastmcp import FastMCP, Context
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .api_client import NotebookLMClient, extract_cookies_from_chrome_export, parse_timestamp
-from . import constants
-from . import __version__
+from nlm_proxy.core import NotebookLMClient, load_cached_tokens, AuthTokens, save_tokens_to_cache, get_cache_path
+from nlm_proxy.core import constants
+from nlm_proxy import __version__
 
 # MCP request/response logger
-mcp_logger = logging.getLogger("notebooklm_mcp.mcp")
+mcp_logger = logging.getLogger("nlm_proxy.mcp")
 
 # Initialize MCP server
 mcp = FastMCP(
@@ -79,6 +79,26 @@ def logged_tool():
     return decorator
 
 
+def extract_cookies_from_chrome_export(cookie_header: str) -> dict[str, str]:
+    """Extract cookies from Chrome DevTools cookie header format."""
+    cookies = {}
+    for part in cookie_header.split("; "):
+        if "=" in part:
+            key, value = part.split("=", 1)
+            cookies[key] = value
+    return cookies
+
+
+def parse_timestamp(ts: Any) -> str | None:
+    """Parse timestamp from API response."""
+    if ts is None:
+        return None
+    if isinstance(ts, (int, float)):
+        from datetime import datetime
+        return datetime.fromtimestamp(ts / 1000).isoformat()
+    return str(ts)
+
+
 async def get_client() -> NotebookLMClient:
     """Get or create the API client.
 
@@ -87,8 +107,6 @@ async def get_client() -> NotebookLMClient:
     global _client
     async with _get_lock():
         if _client is None:
-            from .auth import load_cached_tokens
-
             cookie_header = os.environ.get("NOTEBOOKLM_COOKIES", "")
             csrf_token = os.environ.get("NOTEBOOKLM_CSRF_TOKEN", "")
             session_id = os.environ.get("NOTEBOOKLM_SESSION_ID", "")
@@ -133,8 +151,6 @@ async def refresh_auth() -> dict[str, Any]:
 
     try:
         # Try reloading from disk first
-        from .auth import load_cached_tokens
-
         cached = load_cached_tokens()
         if cached:
             # Reset client to force re-initialization with fresh tokens
@@ -147,7 +163,7 @@ async def refresh_auth() -> dict[str, Any]:
 
         # Try headless auth if Chrome profile exists
         try:
-            from .auth_cli import run_headless_auth
+            from nlm_proxy.core.auth_cli import run_headless_auth
             tokens = run_headless_auth()
             if tokens:
                 _client = None
@@ -539,7 +555,7 @@ async def notebook_query_stream(
 
             if chunk["type"] == "thinking":
                 thinking_steps.append(chunk["text"])
-                mcp_logger.debug(f"📤 Streaming chunk #{chunk_count} (thinking): {chunk['text'][:80]}...")
+                mcp_logger.debug(f"Streaming chunk #{chunk_count} (thinking): {chunk['text'][:80]}...")
                 # Report thinking progress to MCP client
                 if ctx:
                     # Truncate thinking text for progress message
@@ -547,19 +563,19 @@ async def notebook_query_stream(
                     await ctx.report_progress(
                         progress=chunk_count,
                         total=chunk_count + 5,  # Estimated total
-                        message=f"🤔 {preview}",
+                        message=f"Thinking: {preview}",
                     )
             else:
                 answer_chunks.append(chunk["text"])
-                mcp_logger.debug(f"📤 Streaming chunk #{chunk_count} (answer): {len(chunk['text'])} chars")
+                mcp_logger.debug(f"Streaming chunk #{chunk_count} (answer): {len(chunk['text'])} chars")
                 # Report answer progress with actual answer text
                 if ctx:
-                    # Send answer chunk with 💡 prefix so client can identify it
-                    # Format: "💡<chunk_text>" - client should strip prefix and append text
+                    # Send answer chunk with prefix so client can identify it
+                    # Format: "Answer:<chunk_text>" - client should strip prefix and append text
                     await ctx.report_progress(
                         progress=chunk_count,
                         total=chunk_count + 1,
-                        message=f"💡{chunk['text']}",
+                        message=f"Answer:{chunk['text']}",
                     )
 
         # Combine answer chunks (use longest as final answer)
@@ -1915,7 +1931,6 @@ async def mind_map_create(
 
 
 
-
 # Essential cookies for NotebookLM API authentication
 # Only these are needed - no need to save all 20+ cookies from the browser
 ESSENTIAL_COOKIES = [
@@ -1954,7 +1969,6 @@ async def save_auth_tokens(
     try:
         import time
         import urllib.parse
-        from .auth import AuthTokens, save_tokens_to_cache
 
         # Parse cookie string to dict
         all_cookies = {}
@@ -2003,11 +2017,9 @@ async def save_auth_tokens(
         # Reset client so next call uses fresh tokens
         _client = None
 
-        from .auth import get_cache_path
-
         # Build status message
         if csrf_token and session_id:
-            token_msg = "CSRF token and session ID extracted from network request - no page fetch needed! ⚡"
+            token_msg = "CSRF token and session ID extracted from network request - no page fetch needed!"
         elif csrf_token:
             token_msg = "CSRF token extracted from network request. Session ID will be auto-extracted on first use."
         elif session_id:
@@ -2026,141 +2038,84 @@ async def save_auth_tokens(
         return {"status": "error", "error": str(e)}
 
 
-def main():
+def main(debug: bool = False, transport: str = "stdio", port: int = 8000):
     """Run the MCP server.
-    
+
     Supports multiple transports:
     - stdio (default): For desktop apps like Claude Desktop
     - http: Streamable HTTP for network access
     - sse: Legacy SSE transport (backwards compatibility)
-    
-    Configuration via CLI args or environment variables.
+
+    Configuration via function parameters or environment variables.
     """
-    parser = argparse.ArgumentParser(
-        description="NotebookLM MCP Server",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Environment Variables:
-  NOTEBOOKLM_MCP_TRANSPORT     Transport type (stdio, http, sse)
-  NOTEBOOKLM_MCP_HOST          Host to bind (default: 127.0.0.1)
-  NOTEBOOKLM_MCP_PORT          Port to listen on (default: 8000)
-  NOTEBOOKLM_MCP_PATH          MCP endpoint path (default: /mcp)
-  NOTEBOOKLM_MCP_STATELESS     Enable stateless mode for scaling (true/false)
-  NOTEBOOKLM_MCP_DEBUG         Enable debug logging for MCP + API traffic (true/false)
-  NOTEBOOKLM_QUERY_TIMEOUT     Query timeout in seconds (default: 120.0)
+    # Get settings from environment variables with function params as defaults
+    transport = os.environ.get("NOTEBOOKLM_MCP_TRANSPORT", transport)
+    host = os.environ.get("NOTEBOOKLM_MCP_HOST", "127.0.0.1")
+    port = int(os.environ.get("NOTEBOOKLM_MCP_PORT", str(port)))
+    path = os.environ.get("NOTEBOOKLM_MCP_PATH", "/mcp")
+    stateless = os.environ.get("NOTEBOOKLM_MCP_STATELESS", "").lower() == "true"
+    debug = debug or os.environ.get("NOTEBOOKLM_MCP_DEBUG", "").lower() == "true"
+    query_timeout = float(os.environ.get("NOTEBOOKLM_QUERY_TIMEOUT", "120.0"))
 
-Examples:
-  notebooklm-mcp                              # Default stdio transport
-  notebooklm-mcp --transport http             # HTTP on localhost:8000
-  notebooklm-mcp --transport http --port 3000 # HTTP on custom port
-  notebooklm-mcp --transport http --host 0.0.0.0  # Bind to all interfaces
-  notebooklm-mcp --debug                      # Log MCP calls + NotebookLM API traffic
-  notebooklm-mcp --query-timeout 180          # Set query timeout to 180 seconds
-
-        """
-    )
-    
-    parser.add_argument(
-        "--transport", "-t",
-        choices=["stdio", "http", "sse"],
-        default=os.environ.get("NOTEBOOKLM_MCP_TRANSPORT", "stdio"),
-        help="Transport protocol (default: stdio)"
-    )
-    parser.add_argument(
-        "--host", "-H",
-        default=os.environ.get("NOTEBOOKLM_MCP_HOST", "127.0.0.1"),
-        help="Host to bind for HTTP/SSE (default: 127.0.0.1)"
-    )
-    parser.add_argument(
-        "--port", "-p",
-        type=int,
-        default=int(os.environ.get("NOTEBOOKLM_MCP_PORT", "8000")),
-        help="Port for HTTP/SSE transport (default: 8000)"
-    )
-    parser.add_argument(
-        "--path",
-        default=os.environ.get("NOTEBOOKLM_MCP_PATH", "/mcp"),
-        help="MCP endpoint path for HTTP (default: /mcp)"
-    )
-    parser.add_argument(
-        "--stateless",
-        action="store_true",
-        default=os.environ.get("NOTEBOOKLM_MCP_STATELESS", "").lower() == "true",
-        help="Enable stateless mode for horizontal scaling"
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=os.environ.get("NOTEBOOKLM_MCP_DEBUG", "").lower() == "true",
-        help="Enable debug logging (MCP tool calls + NotebookLM API requests/responses)"
-    )
-    parser.add_argument(
-        "--query-timeout",
-        type=float,
-        default=float(os.environ.get("NOTEBOOKLM_QUERY_TIMEOUT", "120.0")),
-        help="Query timeout in seconds (default: 120.0)"
-    )
-    args = parser.parse_args()
-    
-    # Update global query timeout from CLI args
+    # Update global query timeout
     global _query_timeout
-    _query_timeout = args.query_timeout
-    
+    _query_timeout = query_timeout
+
     # Configure logging
-    if args.debug:
+    if debug:
         logging.basicConfig(
             level=logging.WARNING,  # Suppress most logs
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-        
+
         # Shared handler and formatter for debug loggers
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter(
             '%(asctime)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         ))
-        
+
         # Enable MCP request/response logging
         mcp_logger.setLevel(logging.DEBUG)
         mcp_logger.addHandler(handler)
         mcp_logger.propagate = False  # Prevent duplicate logging via root logger
 
         # Enable API request/response logging (between MCP server and NotebookLM API)
-        api_logger = logging.getLogger("notebooklm_mcp.api")
+        api_logger = logging.getLogger("nlm_proxy.api")
         api_logger.setLevel(logging.DEBUG)
         api_logger.addHandler(handler)
         api_logger.propagate = False  # Prevent duplicate logging via root logger
-        
+
         print("Debug logging: ENABLED (MCP tool calls + NotebookLM API requests/responses)")
-    
-    if args.transport == "http":
-        print(f"Starting NotebookLM MCP server (HTTP) on http://{args.host}:{args.port}{args.path}")
-        print(f"Health check: http://{args.host}:{args.port}/health")
-        if args.stateless:
+
+    if transport == "http":
+        print(f"Starting NotebookLM MCP server (HTTP) on http://{host}:{port}{path}")
+        print(f"Health check: http://{host}:{port}/health")
+        if stateless:
             print("Stateless mode: ENABLED (suitable for horizontal scaling)")
         mcp.run(
             transport="http",
-            host=args.host,
-            port=args.port,
-            path=args.path,
-            stateless_http=args.stateless,
+            host=host,
+            port=port,
+            path=path,
+            stateless_http=stateless,
         )
-    elif args.transport == "sse":
-        print(f"Starting NotebookLM MCP server (SSE) on http://{args.host}:{args.port}/sse")
-        print(f"Health check: http://{args.host}:{args.port}/health")
-        if args.stateless:
+    elif transport == "sse":
+        print(f"Starting NotebookLM MCP server (SSE) on http://{host}:{port}/sse")
+        print(f"Health check: http://{host}:{port}/health")
+        if stateless:
             print("Stateless mode: ENABLED (suitable for horizontal scaling)")
         mcp.run(
             transport="sse",
-            host=args.host,
-            port=args.port,
-            stateless_http=args.stateless,
+            host=host,
+            port=port,
+            stateless_http=stateless,
         )
     else:
         # Default: stdio transport (no message - stdio should be silent)
         mcp.run()
-    
+
     return 0
 
 

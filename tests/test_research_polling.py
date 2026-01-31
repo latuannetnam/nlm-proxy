@@ -1,7 +1,8 @@
 
 import pytest
 from unittest.mock import patch
-from notebooklm_mcp.api_client import NotebookLMClient
+from nlm_proxy.core import NotebookLMClient
+
 
 @pytest.fixture
 def mock_client():
@@ -10,6 +11,7 @@ def mock_client():
         client = NotebookLMClient(cookies=cookies, csrf_token="old_token", session_id="old_sid")
         return client
 
+@pytest.mark.mcp
 class TestNotebookLMClientFiltering:
     def test_poll_research_filtering(self, mock_client):
         """Test poll_research filters by task_id and handles status codes correctly."""

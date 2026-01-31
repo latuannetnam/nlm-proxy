@@ -18,7 +18,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from . import constants
+from nlm_proxy.core import constants
 
 # Configure logger (API internals only logged at DEBUG level, usually disabled)
 logger = logging.getLogger("notebooklm_mcp.api")
@@ -444,7 +444,7 @@ class NotebookLMClient:
         """
         try:
             import time
-            from .auth import AuthTokens, save_tokens_to_cache, load_cached_tokens
+            from nlm_proxy.core.auth import AuthTokens, save_tokens_to_cache, load_cached_tokens
 
             # Load existing cache or create new
             cached = load_cached_tokens()
@@ -703,7 +703,7 @@ class NotebookLMClient:
         
         Returns True if new valid tokens were obtained, False otherwise.
         """
-        from .auth import load_cached_tokens, get_cache_path
+        from nlm_proxy.core.auth import load_cached_tokens, get_cache_path
         
         # Check if auth.json has tokens - always try them since current tokens failed
         cache_path = get_cache_path()
@@ -720,7 +720,7 @@ class NotebookLMClient:
         
         # Try headless auth if Chrome profile exists
         try:
-            from .auth_cli import run_headless_auth
+            from notebooklm_mcp.auth_cli import run_headless_auth
             tokens = run_headless_auth()
             if tokens:
                 self.cookies = tokens.cookies
