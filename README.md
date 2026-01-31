@@ -1,10 +1,16 @@
 # NLM Proxy
 
-MCP server and OpenAI-compatible proxy for **NotebookLM** (notebooklm.google.com).
+**NotebookLM client library** with MCP server and OpenAI-compatible proxy for **NotebookLM** (notebooklm.google.com).
 
-> This project is a fork of [notebooklm-mcp](https://github.com/jacob-bd/notebooklm-mcp) with significant enhancements, including an OpenAI-compatible API proxy that allows any OpenAI client to interact with NotebookLM.
+> This project is a fork of [notebooklm-mcp](https://github.com/jacob-bd/notebooklm-mcp) with significant enhancements, including an OpenAI-compatible API proxy and modular architecture.
 
 ## Key Features
+
+### Core Library
+Standalone Python library for programmatic NotebookLM access:
+- Zero framework dependencies
+- Reusable in any Python project
+- Clean separation of concerns
 
 ### MCP Server
 Full programmatic access to NotebookLM through the Model Context Protocol:
@@ -30,14 +36,29 @@ Connect **any OpenAI client** (Open WebUI, Python SDK, etc.) to NotebookLM:
 
 ## Installation
 
+### Basic Installation
+
 ```bash
 # Using uv (recommended)
 uv tool install nlm-proxy
 
 # Using pip
 pip install nlm-proxy
+```
 
-# From source
+### Installation with Extras
+
+```bash
+# Install with MCP server support
+pip install nlm-proxy[mcp]
+
+# Install with OpenAI proxy support
+pip install nlm-proxy[openai]
+
+# Install everything
+pip install nlm-proxy[all]
+
+# Install from source
 git clone https://github.com/latuannetnam/nlm-proxy.git
 cd nlm-proxy
 uv tool install .
@@ -45,49 +66,79 @@ uv tool install .
 
 **Python requirement:** >=3.11
 
-## Authentication
+## Quick Start
 
-Before using, authenticate with NotebookLM:
+### 1. Authentication
+
+Extract authentication tokens from your browser:
 
 ```bash
-# Auto mode: launches Chrome, you log in
-notebooklm-mcp-auth
-
-# File mode: manual cookie extraction
-notebooklm-mcp-auth --file
+nlm-proxy auth extract
 ```
 
-## Usage
+Test your authentication:
 
-### MCP Server
+```bash
+nlm-proxy auth test
+```
+
+### 2. Use as Python Library
+
+```python
+from nlm_proxy.core import NotebookLMClient, load_cached_tokens
+
+# Load authentication
+tokens = load_cached_tokens()
+client = NotebookLMClient(tokens)
+
+# List notebooks
+notebooks = client.list_notebooks()
+for nb in notebooks:
+    print(f"{nb.title} ({nb.id})")
+
+# Query a notebook
+response = client.query_notebook(
+    notebook_id="<notebook-id>",
+    query="Summarize the main points"
+)
+print(response["answer"])
+```
+
+### 3. Run MCP Server
 
 ```bash
 # Standard stdio transport (for Claude Code, Cursor, etc.)
-notebooklm-mcp
+nlm-proxy serve mcp
 
 # HTTP transport (for remote access)
-notebooklm-mcp --transport http --port 8000
+nlm-proxy serve mcp --transport http --port 8000
 
 # With debug logging
-notebooklm-mcp --debug
+nlm-proxy serve mcp --debug
 ```
 
 **Add to Claude Code:**
 ```bash
-claude mcp add --scope user notebooklm-mcp notebooklm-mcp
+claude mcp add --scope user notebooklm-mcp nlm-proxy serve mcp
 ```
 
-### OpenAI Proxy
+### 4. Run OpenAI Proxy
 
 ```bash
 # Start the proxy server
-notebooklm-openai --port 8080
+nlm-proxy serve openai --port 8080
 
 # With custom session TTL (1 hour)
-notebooklm-openai --port 8080 --session-ttl 3600
+nlm-proxy serve openai --port 8080 --session-ttl 3600
+
+# With custom host
+nlm-proxy serve openai --host 127.0.0.1 --port 8000
 ```
 
-**Connect with OpenAI Python SDK:**
+## OpenAI Proxy Usage
+
+### Python SDK
+
 ```python
 from openai import OpenAI
 
@@ -108,20 +159,78 @@ for chunk in response:
         print(chunk.choices[0].delta.content, end="")
 ```
 
-**Connect with Open WebUI:**
+### Open WebUI
+
 1. Set `ENABLE_FORWARD_USER_INFO_HEADERS=true` in Open WebUI
 2. Add connection: `http://localhost:8080/v1`
 3. Select a notebook as the model
+
+### Custom Parameters
+
+```python
+response = client.chat.completions.create(
+    model="notebook-id",
+    messages=[...],
+    extra_body={
+        "conversation_id": "prev-conv-id",  # For multi-turn
+        "include_thinking": True  # Include reasoning steps
+    }
+)
+```
 
 ## API Endpoints (OpenAI Proxy)
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /v1/models` | List notebooks as models |
-| `POST /v1/chat/completions` | Chat with a notebook |
+| `POST /v1/chat/completions` | Chat with a notebook (streaming/non-streaming) |
+| `POST /v1/embeddings` | Returns 501 (not supported) |
 | `GET /health` | Health check |
 | `GET /v1/sessions` | List active sessions |
+| `DELETE /v1/sessions/{chat_id}` | Delete specific session |
 | `GET /v1/sessions/stats` | Session statistics |
+
+## CLI Reference
+
+```bash
+# Authentication
+nlm-proxy auth extract     # Extract tokens from browser
+nlm-proxy auth test        # Test current tokens
+
+# MCP Server
+nlm-proxy serve mcp [OPTIONS]
+  --debug                  # Enable debug logging
+  --transport {stdio,http} # Transport type (default: stdio)
+  --port PORT              # Port for HTTP transport (default: 8000)
+
+# OpenAI Proxy
+nlm-proxy serve openai [OPTIONS]
+  --host HOST              # Host to bind (default: 0.0.0.0)
+  --port PORT              # Port to listen (default: 8080)
+  --session-ttl SECONDS    # Session TTL (default: 86400 = 24h)
+```
+
+## Architecture
+
+```
+src/nlm_proxy/
+├── __init__.py         # Package version
+├── cli.py              # Unified CLI entry point
+├── core/               # Standalone library (no framework deps)
+│   ├── __init__.py     # Public exports
+│   ├── client.py       # NotebookLMClient
+│   ├── auth.py         # Token management
+│   ├── constants.py    # Code mappings
+│   └── exceptions.py   # Custom exceptions
+├── mcp/                # MCP server (optional)
+│   ├── __init__.py     # Lazy imports
+│   └── server.py       # FastMCP tools
+└── openai/             # OpenAI proxy (optional)
+    ├── __init__.py     # Lazy imports
+    ├── server.py       # FastAPI routes
+    ├── session.py      # Session management
+    └── types.py        # Pydantic models
+```
 
 ## MCP Tools
 
@@ -164,6 +273,22 @@ for chunk in response:
 
 </details>
 
+## Development
+
+```bash
+# Install dependencies
+uv tool install .
+
+# Reinstall after code changes
+uv cache clean && uv tool install --force .
+
+# Run tests
+uv run pytest
+
+# Run specific test
+uv run pytest tests/test_file.py::test_function -v
+```
+
 ## Disclaimer
 
 This project uses **internal/undocumented APIs** that may change without notice. Use at your own risk for personal/experimental purposes.
@@ -179,7 +304,7 @@ This project uses **internal/undocumented APIs** that may change without notice.
 This project is based on [notebooklm-mcp](https://github.com/jacob-bd/notebooklm-mcp) by **Jacob Ben-David** ([@jacob-bd](https://github.com/jacob-bd)).
 
 Contributors:
-- **Le Anh Tuan** ([@latuannetnam](https://github.com/latuannetnam)) - OpenAI-compatible proxy, HTTP transport, session management, debug logging
+- **Le Anh Tuan** ([@latuannetnam](https://github.com/latuannetnam)) - OpenAI-compatible proxy, HTTP transport, session management, refactoring
 - **David Szabo-Pele** ([@davidszp](https://github.com/davidszp)) - `source_get_content` tool, Linux auth fixes
 
 ## License
