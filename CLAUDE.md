@@ -18,13 +18,19 @@ uv tool install .
 uv cache clean && uv tool install --force .
 
 # Run the MCP server (stdio)
-notebooklm-mcp
+nlm-proxy serve mcp
 
 # Run with Debug logging
-notebooklm-mcp --debug
+nlm-proxy serve mcp --debug
 
 # Run as HTTP server
-notebooklm-mcp --transport http --port 8000
+nlm-proxy serve mcp --transport http --port 8000
+
+# Run OpenAI proxy
+nlm-proxy serve openai --port 8080
+
+# Test authentication
+nlm-proxy auth test
 
 # Run tests
 uv run pytest
@@ -85,18 +91,27 @@ When API calls fail with auth errors, re-extract fresh cookies from Chrome DevTo
 ## Architecture
 
 ```
-src/notebooklm_mcp/
+src/nlm_proxy/
 ├── __init__.py      # Package version
-├── server.py        # FastMCP server with tool definitions
-├── api_client.py    # Internal API client
-├── constants.py     # Code-name mappings (CodeMapper class)
-├── auth.py          # Token caching and validation
-└── auth_cli.py      # CLI for Chrome-based auth (notebooklm-mcp-auth)
+├── cli.py           # Unified CLI entry point
+├── core/
+│   ├── __init__.py  # Public exports
+│   ├── client.py    # NotebookLMClient
+│   ├── auth.py      # Token management
+│   ├── constants.py # Code mappings
+│   └── exceptions.py # Custom exceptions
+├── mcp/
+│   ├── __init__.py  # Lazy imports
+│   └── server.py    # FastMCP tools
+└── openai/
+    ├── __init__.py  # Lazy imports
+    ├── server.py    # FastAPI routes
+    ├── session.py   # Session management
+    └── types.py     # Pydantic models
 ```
 
 **Executables:**
-- `notebooklm-mcp` - The MCP server
-- `notebooklm-mcp-auth` - CLI for extracting tokens (requires closing Chrome)
+- `nlm-proxy` - Unified CLI (serve mcp, serve openai, auth commands)
 
 ## MCP Tools Provided
 
@@ -213,13 +228,13 @@ An OpenAI-compatible proxy server that allows connecting any OpenAI client to No
 
 ```bash
 # Start the proxy server (default: 24-hour session TTL)
-notebooklm-openai --port 8080
+nlm-proxy serve openai --port 8080
 
 # With custom session expiration (1 hour)
-notebooklm-openai --port 8080 --session-ttl 3600
+nlm-proxy serve openai --port 8080 --session-ttl 3600
 
 # With custom host
-notebooklm-openai --host 127.0.0.1 --port 8000
+nlm-proxy serve openai --host 127.0.0.1 --port 8000
 ```
 
 **CLI Options:**
