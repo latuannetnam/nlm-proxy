@@ -20,6 +20,7 @@ from .auth import (
     validate_cookies,
     REQUIRED_COOKIES,
 )
+from .client import NotebookLMClient, Notebook, ConversationTurn
 
 __all__ = [
     "CodeMapper",
@@ -38,4 +39,7 @@ __all__ = [
     "parse_cookies_from_chrome_format",
     "validate_cookies",
     "REQUIRED_COOKIES",
+    "NotebookLMClient",
+    "Notebook",
+    "ConversationTurn",
 ]
