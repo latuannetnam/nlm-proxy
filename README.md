@@ -70,22 +70,71 @@ uv tool install .
 
 ### 1. Authentication
 
-Extract authentication tokens from your browser:
+**Three methods available:**
+
+#### Method 1: Automated Chrome Extraction (Recommended)
+
+Automatically launches Chrome, extracts tokens, and saves them:
 
 ```bash
-# If installed with uv tool
+# Automatic extraction (launches Chrome)
 nlm-proxy auth extract
 
 # Or with uv run (from source)
 uv run nlm-proxy auth extract
+
+# First time: Log in to Google in the Chrome window
+# Next times: Uses saved profile (instant!)
 ```
 
-Test your authentication:
+**How it works:**
+- Launches Chrome with remote debugging
+- Navigates to NotebookLM
+- Waits for you to log in (first time only)
+- Extracts cookies, CSRF token, and session ID automatically
+- Saves profile at `~/.notebooklm-mcp/chrome-profile` for future use
+
+#### Method 2: File-Based Import (Most Reliable)
+
+Manually copy cookies from Chrome DevTools and import from file:
+
+```bash
+# Shows step-by-step instructions
+nlm-proxy auth extract --file
+
+# Direct file import
+nlm-proxy auth extract --file ~/cookies.txt
+```
+
+**Steps:**
+1. Open https://notebooklm.google.com in Chrome
+2. Press F12 to open DevTools
+3. Go to Network tab, filter "batchexecute"
+4. Click on a request, find "cookie:" in Request Headers
+5. Copy the cookie value and save to a file
+6. Run the command above with your file path
+
+#### Method 3: Environment Variables
+
+```bash
+export NOTEBOOKLM_COOKIES="SID=xxx; HSID=xxx; SSID=xxx; ..."
+```
+
+**Test your authentication:**
 
 ```bash
 nlm-proxy auth test
-# Or: with run run (from source)
-uv run nlm-proxy auth test
+# Or: uv run nlm-proxy auth test
+```
+
+**Additional Options:**
+
+```bash
+# Custom Chrome DevTools port
+nlm-proxy auth extract --port 9223
+
+# Use existing Chrome instance (must have --remote-debugging-port=9222)
+nlm-proxy auth extract --no-auto-launch
 ```
 
 ### 2. Use as Python Library
