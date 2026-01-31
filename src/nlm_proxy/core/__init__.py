@@ -20,7 +20,7 @@ from .auth import (
     validate_cookies,
     REQUIRED_COOKIES,
 )
-from .client import NotebookLMClient, Notebook, ConversationTurn
+from .client import NotebookLMClient, Notebook, ConversationTurn, SOURCE_ADD_TIMEOUT
 
 __all__ = [
     "CodeMapper",
@@ -42,4 +42,5 @@ __all__ = [
     "NotebookLMClient",
     "Notebook",
     "ConversationTurn",
+    "SOURCE_ADD_TIMEOUT",
 ]
