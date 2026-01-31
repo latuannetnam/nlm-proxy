@@ -31,8 +31,8 @@ import httpx
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from notebooklm_mcp.auth import load_cached_tokens
-from notebooklm_mcp.api_client import NotebookLMClient
+from nlm_proxy.core.auth import load_cached_tokens
+from nlm_proxy.core import NotebookLMClient
 
 
 class StreamingStats:
