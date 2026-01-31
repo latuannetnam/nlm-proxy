@@ -241,6 +241,12 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         logger.debug(f"[NOTEBOOKLM] Response received: answer_len={len(answer)}, conversation_id={conv_id}")
         logger.debug(f"[NOTEBOOKLM] Answer preview: {answer[:200]}{'...' if len(answer) > 200 else ''}")
 
+        # Handle empty responses gracefully
+        if not answer or not answer.strip():
+            logger.warning(f"[NOTEBOOKLM] Empty answer received for query: {query_text[:100]}...")
+            # Return a helpful error message instead of empty content
+            answer = "I apologize, but I couldn't generate a response for that query. This might happen when the question doesn't relate to the notebook content or uses unsupported formatting. Please try rephrasing your question."
+
         response = ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
             created=int(time.time()),
