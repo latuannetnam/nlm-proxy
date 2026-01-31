@@ -2046,80 +2046,23 @@ def main(debug: bool = False, transport: str = "stdio", port: int = 8000):
     - http: Streamable HTTP for network access
     - sse: Legacy SSE transport (backwards compatibility)
 
-    Configuration via CLI args or environment variables.
+    Configuration via function parameters or environment variables.
     """
-    parser = argparse.ArgumentParser(
-        description="NotebookLM MCP Server",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Environment Variables:
-  NOTEBOOKLM_MCP_TRANSPORT     Transport type (stdio, http, sse)
-  NOTEBOOKLM_MCP_HOST          Host to bind (default: 127.0.0.1)
-  NOTEBOOKLM_MCP_PORT          Port to listen on (default: 8000)
-  NOTEBOOKLM_MCP_PATH          MCP endpoint path (default: /mcp)
-  NOTEBOOKLM_MCP_STATELESS     Enable stateless mode for scaling (true/false)
-  NOTEBOOKLM_MCP_DEBUG         Enable debug logging for MCP + API traffic (true/false)
-  NOTEBOOKLM_QUERY_TIMEOUT     Query timeout in seconds (default: 120.0)
+    # Get settings from environment variables with function params as defaults
+    transport = os.environ.get("NOTEBOOKLM_MCP_TRANSPORT", transport)
+    host = os.environ.get("NOTEBOOKLM_MCP_HOST", "127.0.0.1")
+    port = int(os.environ.get("NOTEBOOKLM_MCP_PORT", str(port)))
+    path = os.environ.get("NOTEBOOKLM_MCP_PATH", "/mcp")
+    stateless = os.environ.get("NOTEBOOKLM_MCP_STATELESS", "").lower() == "true"
+    debug = debug or os.environ.get("NOTEBOOKLM_MCP_DEBUG", "").lower() == "true"
+    query_timeout = float(os.environ.get("NOTEBOOKLM_QUERY_TIMEOUT", "120.0"))
 
-Examples:
-  notebooklm-mcp                              # Default stdio transport
-  notebooklm-mcp --transport http             # HTTP on localhost:8000
-  notebooklm-mcp --transport http --port 3000 # HTTP on custom port
-  notebooklm-mcp --transport http --host 0.0.0.0  # Bind to all interfaces
-  notebooklm-mcp --debug                      # Log MCP calls + NotebookLM API traffic
-  notebooklm-mcp --query-timeout 180          # Set query timeout to 180 seconds
-
-        """
-    )
-
-    parser.add_argument(
-        "--transport", "-t",
-        choices=["stdio", "http", "sse"],
-        default=os.environ.get("NOTEBOOKLM_MCP_TRANSPORT", transport),
-        help="Transport protocol (default: stdio)"
-    )
-    parser.add_argument(
-        "--host", "-H",
-        default=os.environ.get("NOTEBOOKLM_MCP_HOST", "127.0.0.1"),
-        help="Host to bind for HTTP/SSE (default: 127.0.0.1)"
-    )
-    parser.add_argument(
-        "--port", "-p",
-        type=int,
-        default=int(os.environ.get("NOTEBOOKLM_MCP_PORT", str(port))),
-        help="Port for HTTP/SSE transport (default: 8000)"
-    )
-    parser.add_argument(
-        "--path",
-        default=os.environ.get("NOTEBOOKLM_MCP_PATH", "/mcp"),
-        help="MCP endpoint path for HTTP (default: /mcp)"
-    )
-    parser.add_argument(
-        "--stateless",
-        action="store_true",
-        default=os.environ.get("NOTEBOOKLM_MCP_STATELESS", "").lower() == "true",
-        help="Enable stateless mode for horizontal scaling"
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=debug or os.environ.get("NOTEBOOKLM_MCP_DEBUG", "").lower() == "true",
-        help="Enable debug logging (MCP tool calls + NotebookLM API requests/responses)"
-    )
-    parser.add_argument(
-        "--query-timeout",
-        type=float,
-        default=float(os.environ.get("NOTEBOOKLM_QUERY_TIMEOUT", "120.0")),
-        help="Query timeout in seconds (default: 120.0)"
-    )
-    args = parser.parse_args()
-
-    # Update global query timeout from CLI args
+    # Update global query timeout
     global _query_timeout
-    _query_timeout = args.query_timeout
+    _query_timeout = query_timeout
 
     # Configure logging
-    if args.debug:
+    if debug:
         logging.basicConfig(
             level=logging.WARNING,  # Suppress most logs
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -2146,28 +2089,28 @@ Examples:
 
         print("Debug logging: ENABLED (MCP tool calls + NotebookLM API requests/responses)")
 
-    if args.transport == "http":
-        print(f"Starting NotebookLM MCP server (HTTP) on http://{args.host}:{args.port}{args.path}")
-        print(f"Health check: http://{args.host}:{args.port}/health")
-        if args.stateless:
+    if transport == "http":
+        print(f"Starting NotebookLM MCP server (HTTP) on http://{host}:{port}{path}")
+        print(f"Health check: http://{host}:{port}/health")
+        if stateless:
             print("Stateless mode: ENABLED (suitable for horizontal scaling)")
         mcp.run(
             transport="http",
-            host=args.host,
-            port=args.port,
-            path=args.path,
-            stateless_http=args.stateless,
+            host=host,
+            port=port,
+            path=path,
+            stateless_http=stateless,
         )
-    elif args.transport == "sse":
-        print(f"Starting NotebookLM MCP server (SSE) on http://{args.host}:{args.port}/sse")
-        print(f"Health check: http://{args.host}:{args.port}/health")
-        if args.stateless:
+    elif transport == "sse":
+        print(f"Starting NotebookLM MCP server (SSE) on http://{host}:{port}/sse")
+        print(f"Health check: http://{host}:{port}/health")
+        if stateless:
             print("Stateless mode: ENABLED (suitable for horizontal scaling)")
         mcp.run(
             transport="sse",
-            host=args.host,
-            port=args.port,
-            stateless_http=args.stateless,
+            host=host,
+            port=port,
+            stateless_http=stateless,
         )
     else:
         # Default: stdio transport (no message - stdio should be silent)

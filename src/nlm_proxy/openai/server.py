@@ -311,18 +311,9 @@ async def session_stats():
 
 def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     """Run the OpenAI-compatible proxy server."""
-    import argparse
-
-    parser = argparse.ArgumentParser(description="NotebookLM OpenAI-compatible proxy server")
-    parser.add_argument("--host", default=host, help=f"Host to bind to (default: {host})")
-    parser.add_argument("--port", type=int, default=port, help=f"Port to listen on (default: {port})")
-    parser.add_argument("--session-ttl", type=int, default=session_ttl,
-                        help=f"Session expiration time in seconds (default: {session_ttl} = {session_ttl/3600:.1f} hours)")
-    args = parser.parse_args()
-
     # Initialize session store with configured TTL
-    app.state.session_store = SessionStore(ttl_seconds=args.session_ttl)
-    logger.info(f"[SESSION] Session store initialized with TTL={args.session_ttl}s ({args.session_ttl/3600:.1f} hours)")
+    app.state.session_store = SessionStore(ttl_seconds=session_ttl)
+    logger.info(f"[SESSION] Session store initialized with TTL={session_ttl}s ({session_ttl/3600:.1f} hours)")
 
     import uvicorn
     import logging
@@ -332,7 +323,7 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     )
 
     try:
-        uvicorn.run(app, host=args.host, port=args.port)
+        uvicorn.run(app, host=host, port=port)
     finally:
         # Cleanup session store on shutdown
         if app.state.session_store:

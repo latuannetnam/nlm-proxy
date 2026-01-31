@@ -72,9 +72,16 @@ def cmd_auth_test(args):
 
 
 def main():
+    from nlm_proxy import __version__
+
     parser = argparse.ArgumentParser(
         prog="nlm-proxy",
         description="NotebookLM client library with MCP and OpenAI interfaces",
+    )
+    parser.add_argument(
+        "-v", "--version",
+        action="version",
+        version=f"%(prog)s {__version__}"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

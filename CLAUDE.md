@@ -11,11 +11,14 @@ Tested with personal/free tier accounts. May work with Google Workspace accounts
 ## Development Commands
 
 ```bash
-# Install dependencies
-uv tool install .
+# Install dependencies (with all extras for full functionality)
+uv pip install -e ".[all]"
+
+# Install as global tool (with all extras)
+uv tool install ".[all]"
 
 # Reinstall after code changes (ALWAYS clean cache first)
-uv cache clean && uv tool install --force .
+uv cache clean && uv tool install ".[all]" --force
 
 # Run the MCP server (stdio)
 nlm-proxy serve mcp
@@ -37,6 +40,49 @@ uv run pytest
 
 # Run a single test
 uv run pytest tests/test_file.py::test_function -v
+```
+
+### Running from Source (Direct Python Import)
+
+If the CLI has caching issues, use direct Python imports:
+
+```bash
+# Run MCP server
+uv run python -m nlm_proxy serve mcp
+
+# Run MCP server with debug
+uv run python -m nlm_proxy serve mcp --debug
+
+# Run MCP server as HTTP
+uv run python -m nlm_proxy serve mcp --transport http --port 8000
+
+# Run OpenAI proxy
+uv run python -m nlm_proxy serve openai --port 8080
+
+# Run OpenAI proxy with custom settings
+uv run python -m nlm_proxy serve openai --host 127.0.0.1 --port 9999 --session-ttl 3600
+
+# Test authentication
+uv run python -m nlm_proxy auth test
+```
+
+**Alternative: Direct Python function calls (bypasses CLI entirely):**
+
+```bash
+# Run MCP server
+uv run python -c "from nlm_proxy.mcp import run_server; run_server()"
+
+# Run MCP server with debug
+uv run python -c "from nlm_proxy.mcp import run_server; run_server(debug=True)"
+
+# Run MCP server as HTTP
+uv run python -c "from nlm_proxy.mcp import run_server; run_server(transport='http', port=8000)"
+
+# Run OpenAI proxy
+uv run python -c "from nlm_proxy.openai import run_server; run_server(port=8080)"
+
+# Run OpenAI proxy with custom settings
+uv run python -c "from nlm_proxy.openai import run_server; run_server(host='127.0.0.1', port=9999, session_ttl=3600)"
 ```
 
 **Python requirement:** >=3.11

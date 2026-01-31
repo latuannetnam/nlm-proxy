@@ -58,9 +58,12 @@ pip install nlm-proxy[openai]
 # Install everything
 pip install nlm-proxy[all]
 
-# Install from source
+# Install from source (for development with all extras)
 git clone https://github.com/latuannetnam/nlm-proxy.git
 cd nlm-proxy
+uv pip install -e ".[all]"
+
+# Or install as global tool
 uv tool install .
 ```
 
@@ -165,8 +168,10 @@ print(response["answer"])
 # Standard stdio transport (for Claude Code, Cursor, etc.)
 nlm-proxy serve mcp
 
-# Or with uv run (from source)
+# From source (using uv run)
 uv run nlm-proxy serve mcp
+# Or using python module
+uv run python -m nlm_proxy serve mcp
 
 # HTTP transport (for remote access)
 nlm-proxy serve mcp --transport http --port 8000
@@ -190,8 +195,10 @@ claude mcp add --scope user notebooklm-mcp uv run nlm-proxy serve mcp
 # Start the proxy server
 nlm-proxy serve openai --port 8080
 
-# Or with uv run (from source)
+# From source (using uv run)
 uv run nlm-proxy serve openai --port 8080
+# Or using python module
+uv run python -m nlm_proxy serve openai --port 8080
 
 # With custom session TTL (1 hour)
 nlm-proxy serve openai --port 8080 --session-ttl 3600
