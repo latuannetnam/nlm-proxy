@@ -3,16 +3,19 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "notebooklm-mcp-server"
-version = "0.1.15"
-description = "MCP server for NotebookLM (notebooklm.google.com)"
+name = "nlm-proxy"
+version = "0.1.0"
+description = "MCP server and OpenAI-compatible proxy for NotebookLM (notebooklm.google.com)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
-    { name = "Jacob Ben-David" }
+    { name = "Le Anh Tuan", email = "latuannetnam@gmail.com" }
 ]
-keywords = ["mcp", "notebooklm", "google", "ai", "research"]
+maintainers = [
+    { name = "Le Anh Tuan", email = "latuannetnam@gmail.com" }
+]
+keywords = ["mcp", "notebooklm", "google", "ai", "research", "openai", "proxy"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
