@@ -770,34 +770,44 @@ wheels = [
 ]
 
 [[package]]
-name = "notebooklm-mcp-server"
-version = "0.1.15"
+name = "nlm-proxy"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
-    { name = "fastapi" },
-    { name = "fastmcp" },
     { name = "httpx" },
-    { name = "uvicorn" },
     { name = "websocket-client" },
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "fastapi" },
+    { name = "fastmcp" },
+    { name = "uvicorn" },
+]
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
+mcp = [
+    { name = "fastmcp" },
+]
+openai = [
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.100.0" },
-    { name = "fastmcp", specifier = ">=0.1.0" },
+    { name = "fastapi", marker = "extra == 'openai'", specifier = ">=0.100.0" },
+    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=0.1.0" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "nlm-proxy", extras = ["mcp", "openai"], marker = "extra == 'all'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "uvicorn", specifier = ">=0.23.0" },
+    { name = "uvicorn", marker = "extra == 'openai'", specifier = ">=0.23.0" },
     { name = "websocket-client", specifier = ">=1.6.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["mcp", "openai", "all", "dev"]
 
 [[package]]
 name = "openapi-pydantic"
