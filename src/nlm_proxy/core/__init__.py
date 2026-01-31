@@ -8,6 +8,18 @@ from .exceptions import (
     NotFoundError,
     APIError,
 )
+from .auth import (
+    AuthTokens,
+    get_cache_path,
+    load_cached_tokens,
+    save_tokens_to_cache,
+    extract_tokens_via_chrome_devtools,
+    extract_csrf_from_page_source,
+    extract_session_id_from_page,
+    parse_cookies_from_chrome_format,
+    validate_cookies,
+    REQUIRED_COOKIES,
+)
 
 __all__ = [
     "CodeMapper",
@@ -16,4 +28,14 @@ __all__ = [
     "RateLimitError",
     "NotFoundError",
     "APIError",
+    "AuthTokens",
+    "get_cache_path",
+    "load_cached_tokens",
+    "save_tokens_to_cache",
+    "extract_tokens_via_chrome_devtools",
+    "extract_csrf_from_page_source",
+    "extract_session_id_from_page",
+    "parse_cookies_from_chrome_format",
+    "validate_cookies",
+    "REQUIRED_COOKIES",
 ]
