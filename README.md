@@ -73,13 +73,18 @@ uv tool install .
 Extract authentication tokens from your browser:
 
 ```bash
+# If installed with uv tool
 nlm-proxy auth extract
+
+# Or with uv run (from source)
+uv run nlm-proxy auth extract
 ```
 
 Test your authentication:
 
 ```bash
 nlm-proxy auth test
+# Or: uv run nlm-proxy auth test
 ```
 
 ### 2. Use as Python Library
@@ -110,6 +115,9 @@ print(response["answer"])
 # Standard stdio transport (for Claude Code, Cursor, etc.)
 nlm-proxy serve mcp
 
+# Or with uv run (from source)
+uv run nlm-proxy serve mcp
+
 # HTTP transport (for remote access)
 nlm-proxy serve mcp --transport http --port 8000
 
@@ -119,7 +127,11 @@ nlm-proxy serve mcp --debug
 
 **Add to Claude Code:**
 ```bash
+# If installed with uv tool
 claude mcp add --scope user notebooklm-mcp nlm-proxy serve mcp
+
+# If running from source
+claude mcp add --scope user notebooklm-mcp uv run nlm-proxy serve mcp
 ```
 
 ### 4. Run OpenAI Proxy
@@ -127,6 +139,9 @@ claude mcp add --scope user notebooklm-mcp nlm-proxy serve mcp
 ```bash
 # Start the proxy server
 nlm-proxy serve openai --port 8080
+
+# Or with uv run (from source)
+uv run nlm-proxy serve openai --port 8080
 
 # With custom session TTL (1 hour)
 nlm-proxy serve openai --port 8080 --session-ttl 3600
