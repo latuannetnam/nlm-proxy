@@ -84,7 +84,8 @@ Test your authentication:
 
 ```bash
 nlm-proxy auth test
-# Or: uv run nlm-proxy auth test
+# Or: with run run (from source)
+uv run nlm-proxy auth test
 ```
 
 ### 2. Use as Python Library
