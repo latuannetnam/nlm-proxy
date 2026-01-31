@@ -212,12 +212,38 @@ An OpenAI-compatible proxy server that allows connecting any OpenAI client to No
 ### Usage
 
 ```bash
-# Start the proxy server
+# Start the proxy server (default: 24-hour session TTL)
 notebooklm-openai --port 8080
 
-# Or with custom host
+# With custom session expiration (1 hour)
+notebooklm-openai --port 8080 --session-ttl 3600
+
+# With custom host
 notebooklm-openai --host 127.0.0.1 --port 8000
 ```
+
+**CLI Options:**
+- `--host`: Host to bind to (default: 0.0.0.0)
+- `--port`: Port to listen on (default: 8080)
+- `--session-ttl`: Session expiration time in seconds (default: 86400 = 24 hours)
+
+### Session Persistence
+
+The proxy automatically maintains conversation context across multiple queries within the same chat session (e.g., Open WebUI chat).
+
+**How it works:**
+- First query in a chat → Creates new NotebookLM conversation
+- Follow-up queries in same chat → Reuses the same `conversation_id` (preserves context)
+- Different chats → Get separate NotebookLM conversations
+- Sessions expire after configured TTL (default: 24 hours)
+
+**Requirements for Open WebUI:**
+```bash
+# REQUIRED: Enable user info headers in Open WebUI
+ENABLE_FORWARD_USER_INFO_HEADERS=true
+```
+
+Without this setting, the proxy cannot extract `chat_id` and each query will start a fresh conversation.
 
 ### Endpoints
 
@@ -227,6 +253,9 @@ notebooklm-openai --host 127.0.0.1 --port 8000
 | `GET /v1/models` | List notebooks as available models |
 | `POST /v1/embeddings` | Returns 501 (not supported) |
 | `GET /health` | Health check |
+| `GET /v1/sessions` | List all active sessions (debugging) |
+| `DELETE /v1/sessions/{chat_id}` | Delete specific session |
+| `GET /v1/sessions/stats` | Show session statistics |
 
 ### Example: OpenAI Python SDK
 

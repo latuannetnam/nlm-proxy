@@ -21,6 +21,7 @@ class ChatCompletionRequest(BaseModel):
     # Custom extensions
     conversation_id: str | None = None
     include_thinking: bool = True
+    metadata: dict | None = None  # Open WebUI sends chat_id here
 
 
 class DeltaContent(BaseModel):

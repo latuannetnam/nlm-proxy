@@ -5,11 +5,12 @@ import logging
 import time
 import uuid
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from .api_client import NotebookLMClient
 from .auth import load_cached_tokens
+from .session_store import SessionStore
 from .openai_types import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -28,6 +29,9 @@ app = FastAPI(
     description="OpenAI-compatible API for NotebookLM",
     version="0.1.0"
 )
+
+# Initialize session store (will be configured with TTL in main())
+app.state.session_store = None
 
 
 async def get_client() -> NotebookLMClient:
@@ -83,7 +87,7 @@ async def list_models():
         await client.close()
 
 
-async def stream_response(client, notebook_id: str, query_text: str, request: ChatCompletionRequest):
+async def stream_response(client, notebook_id: str, query_text: str, request: ChatCompletionRequest, chat_id: str = None):
     """Generate OpenAI-compatible SSE stream from NotebookLM query_stream."""
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
@@ -94,7 +98,7 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
     previous_thinking = ""
     previous_answer = ""
 
-    logger.debug(f"[NOTEBOOKLM] Starting stream query: notebook_id={notebook_id}, query={query_text[:100]}..., conversation_id={request.conversation_id}")
+    logger.debug(f"[NOTEBOOKLM] Starting stream query: notebook_id={notebook_id}, query={query_text[:100]}..., conversation_id={request.conversation_id}, chat_id={chat_id}")
 
     try:
         async for chunk in client.query_stream(
@@ -114,7 +118,12 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
                 previous_thinking = full_text  # Still track it for delta computation
                 continue
 
-            conversation_id = chunk.get("conversation_id", conversation_id)
+            new_conv_id = chunk.get("conversation_id")
+            if new_conv_id and not conversation_id:
+                conversation_id = new_conv_id
+                # Save to session store if we have a chat_id
+                if chat_id and app.state.session_store:
+                    app.state.session_store.set(chat_id, conversation_id)
 
             # Compute delta: NotebookLM sends cumulative text, we need only the new part
             if chunk_type == "thinking":
@@ -161,10 +170,39 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: ChatCompletionRequest, http_request: Request):
     """OpenAI-compatible chat completions endpoint."""
     logger.debug(f"[PROXY] Received request: POST /v1/chat/completions")
     logger.debug(f"[PROXY] Request params: model={request.model}, stream={request.stream}, messages={len(request.messages)}, conversation_id={request.conversation_id}, include_thinking={request.include_thinking}")
+
+    # Log all headers for debugging
+    logger.debug(f"[DEBUG] HTTP Headers: {dict(http_request.headers)}")
+
+    # Log request metadata
+    logger.debug(f"[DEBUG] Request has metadata attr: {hasattr(request, 'metadata')}")
+    logger.debug(f"[DEBUG] Request.metadata value: {request.metadata}")
+    logger.debug(f"[DEBUG] Request.metadata type: {type(request.metadata)}")
+
+    # Extract chat_id from headers or request metadata
+    chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
+    logger.debug(f"[DEBUG] chat_id from header: {chat_id}")
+
+    if not chat_id and hasattr(request, 'metadata') and request.metadata:
+        chat_id = request.metadata.get("chat_id")
+        logger.debug(f"[DEBUG] chat_id from metadata: {chat_id}")
+
+    logger.debug(f"[SESSION] Extracted chat_id: {chat_id}")
+
+    # Load existing conversation_id from session store if chat_id exists
+    if chat_id and app.state.session_store:
+        stored_conv_id = app.state.session_store.get(chat_id)
+        if stored_conv_id:
+            logger.info(f"[SESSION] Reusing conversation: chat_id={chat_id}, conversation_id={stored_conv_id}")
+            request.conversation_id = stored_conv_id
+        else:
+            logger.info(f"[SESSION] New conversation for chat_id={chat_id}")
+    elif not chat_id:
+        logger.debug("[SESSION] No chat_id found, using manual conversation_id mode")
 
     user_messages = [m for m in request.messages if m.role == "user"]
     if not user_messages:
@@ -179,7 +217,7 @@ async def chat_completions(request: ChatCompletionRequest):
     if request.stream:
         logger.debug("[PROXY] Using streaming response")
         return StreamingResponse(
-            stream_response(client, request.model, query_text, request),
+            stream_response(client, request.model, query_text, request, chat_id),
             media_type="text/event-stream"
         )
 
@@ -195,6 +233,10 @@ async def chat_completions(request: ChatCompletionRequest):
 
         answer = result.get("answer", "") if result else ""
         conv_id = result.get("conversation_id", "") if result else ""
+
+        # Save conversation_id to session store if we have a chat_id
+        if chat_id and conv_id and app.state.session_store:
+            app.state.session_store.set(chat_id, conv_id)
 
         logger.debug(f"[NOTEBOOKLM] Response received: answer_len={len(answer)}, conversation_id={conv_id}")
         logger.debug(f"[NOTEBOOKLM] Answer preview: {answer[:200]}{'...' if len(answer) > 200 else ''}")
@@ -226,6 +268,41 @@ async def embeddings():
     )
 
 
+@app.get("/v1/sessions")
+async def list_sessions():
+    """List all active sessions (for debugging)."""
+    if not app.state.session_store:
+        raise HTTPException(status_code=503, detail="Session store not initialized")
+
+    sessions = app.state.session_store.list_all()
+    return {
+        "sessions": sessions,
+        "count": len(sessions)
+    }
+
+
+@app.delete("/v1/sessions/{chat_id}")
+async def delete_session(chat_id: str):
+    """Delete a specific session."""
+    if not app.state.session_store:
+        raise HTTPException(status_code=503, detail="Session store not initialized")
+
+    deleted = app.state.session_store.delete(chat_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Session not found: {chat_id}")
+
+    return {"status": "deleted", "chat_id": chat_id}
+
+
+@app.get("/v1/sessions/stats")
+async def session_stats():
+    """Get session statistics."""
+    if not app.state.session_store:
+        raise HTTPException(status_code=503, detail="Session store not initialized")
+
+    return app.state.session_store.get_stats()
+
+
 def main():
     """CLI entry point for OpenAI-compatible proxy."""
     import argparse
@@ -233,7 +310,13 @@ def main():
     parser = argparse.ArgumentParser(description="NotebookLM OpenAI-compatible proxy server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8080, help="Port to listen on (default: 8080)")
+    parser.add_argument("--session-ttl", type=int, default=86400,
+                        help="Session expiration time in seconds (default: 86400 = 24 hours)")
     args = parser.parse_args()
+
+    # Initialize session store with configured TTL
+    app.state.session_store = SessionStore(ttl_seconds=args.session_ttl)
+    logger.info(f"[SESSION] Session store initialized with TTL={args.session_ttl}s ({args.session_ttl/3600:.1f} hours)")
 
     import uvicorn
     import logging
@@ -241,7 +324,13 @@ def main():
         level=logging.DEBUG,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    uvicorn.run(app, host=args.host, port=args.port)
+
+    try:
+        uvicorn.run(app, host=args.host, port=args.port)
+    finally:
+        # Cleanup session store on shutdown
+        if app.state.session_store:
+            app.state.session_store.shutdown()
 
 
 if __name__ == "__main__":
