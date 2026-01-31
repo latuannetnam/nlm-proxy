@@ -1,5 +1,6 @@
 """Core NotebookLM client library."""
 
+from .constants import CodeMapper
 from .exceptions import (
     NLMProxyError,
     AuthenticationError,
@@ -9,6 +10,7 @@ from .exceptions import (
 )
 
 __all__ = [
+    "CodeMapper",
     "NLMProxyError",
     "AuthenticationError",
     "RateLimitError",
