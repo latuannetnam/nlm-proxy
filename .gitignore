@@ -55,5 +55,5 @@ CLAUDE.local.md
 # Auto Claude data directory
 .auto-claude/
 .worktrees/
-.claude/
+.claude/settings.local.json
 run*
