@@ -91,6 +91,7 @@ class OpenAISettings(BaseSettings):
     session_ttl: int = Field(
         default=86400, description="Session TTL in seconds (default: 24h)"
     )
+    api_key: str = Field(description="API key for authentication (required)")
 
     model_config = SettingsConfigDict(
         env_prefix="NLM_PROXY_OPENAI_",

@@ -78,15 +78,22 @@ class TestOpenAISettings:
     """Test OpenAISettings class."""
 
     def test_default_values(self):
-        """Default values for OpenAI settings."""
-        env = {k: v for k, v in os.environ.items() if not k.startswith("NLM_PROXY_OPENAI_")}
-        with patch.dict(os.environ, env, clear=True):
+        """Default values for OpenAI settings (with required api_key)."""
+        # Test that env vars are picked up correctly
+        env_vars = {
+            "NLM_PROXY_OPENAI_API_KEY": "test-key",
+            "NLM_PROXY_OPENAI_HOST": "0.0.0.0",
+            "NLM_PROXY_OPENAI_PORT": "8080",
+            "NLM_PROXY_OPENAI_SESSION_TTL": "86400",
+        }
+        with patch.dict(os.environ, env_vars, clear=False):
             from nlm_proxy.core.config import OpenAISettings
             settings = OpenAISettings()
 
             assert settings.host == "0.0.0.0"
             assert settings.port == 8080
             assert settings.session_ttl == 86400
+            assert settings.api_key == "test-key"
 
     def test_env_override_all(self):
         """All OpenAI env vars should work."""
@@ -94,6 +101,7 @@ class TestOpenAISettings:
             "NLM_PROXY_OPENAI_HOST": "127.0.0.1",
             "NLM_PROXY_OPENAI_PORT": "3000",
             "NLM_PROXY_OPENAI_SESSION_TTL": "3600",
+            "NLM_PROXY_OPENAI_API_KEY": "my-secret-key",
         }
         with patch.dict(os.environ, env_vars, clear=False):
             from nlm_proxy.core.config import OpenAISettings
@@ -102,6 +110,24 @@ class TestOpenAISettings:
             assert settings.host == "127.0.0.1"
             assert settings.port == 3000
             assert settings.session_ttl == 3600
+            assert settings.api_key == "my-secret-key"
+
+    def test_api_key_required(self):
+        """OpenAISettings should require api_key."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith("NLM_PROXY_OPENAI_")}
+        with patch.dict(os.environ, env, clear=True):
+            from pydantic import ValidationError
+            from nlm_proxy.core.config import OpenAISettings
+            with pytest.raises(ValidationError) as exc_info:
+                OpenAISettings()
+            assert "api_key" in str(exc_info.value)
+
+    def test_api_key_from_env(self):
+        """NLM_PROXY_OPENAI_API_KEY should set api_key."""
+        with patch.dict(os.environ, {"NLM_PROXY_OPENAI_API_KEY": "test-key-123"}, clear=False):
+            from nlm_proxy.core.config import OpenAISettings
+            settings = OpenAISettings()
+            assert settings.api_key == "test-key-123"
 
 
 class TestAuthSettings:

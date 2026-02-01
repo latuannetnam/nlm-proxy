@@ -2,6 +2,38 @@
 
 Connect any OpenAI client to NotebookLM.
 
+## Authentication
+
+The OpenAI proxy requires API key authentication on all `/v1/*` endpoints.
+
+### Setup
+
+Set the required environment variable:
+
+```bash
+export NLM_PROXY_OPENAI_API_KEY="your-secret-key-here"
+nlm-proxy serve openai
+```
+
+Or in `.env`:
+
+```
+NLM_PROXY_OPENAI_API_KEY=your-secret-key-here
+```
+
+### Error Responses
+
+Missing or invalid API key returns 401:
+```json
+{
+  "error": {
+    "message": "Invalid API key",
+    "type": "invalid_request_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
 ## Usage
 
 ```bash
@@ -44,7 +76,7 @@ ENABLE_FORWARD_USER_INFO_HEADERS=true
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="dummy")
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="your-nlm-proxy-key")
 
 # List notebooks
 for model in client.models.list():

@@ -1,14 +1,17 @@
 """OpenAI-compatible proxy server for NotebookLM."""
 
 import json
+import secrets
 import time
 import uuid
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from nlm_proxy.core import NotebookLMClient
 from nlm_proxy.core.auth import load_cached_tokens
+from nlm_proxy.core.config import get_openai_settings
 from nlm_proxy.core.logging import get_logger
 from nlm_proxy.openai.session import SessionStore
 from nlm_proxy.openai.types import (
@@ -34,6 +37,29 @@ app = FastAPI(
 app.state.session_store = None
 
 
+def verify_api_key(authorization: Annotated[str | None, Header()] = None) -> None:
+    """Verify the API key from Authorization header."""
+    settings = get_openai_settings()
+
+    error_response = {
+        "error": {
+            "message": "Invalid API key",
+            "type": "invalid_request_error",
+            "code": "invalid_api_key"
+        }
+    }
+
+    if not authorization:
+        raise HTTPException(status_code=401, detail=error_response)
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail=error_response)
+
+    token = authorization.removeprefix("Bearer ")
+    if not secrets.compare_digest(token, settings.api_key):
+        raise HTTPException(status_code=401, detail=error_response)
+
+
 async def get_client() -> NotebookLMClient:
     """Get authenticated NotebookLM client."""
     tokens = load_cached_tokens()
@@ -57,7 +83,7 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/v1/models")
+@app.get("/v1/models", dependencies=[Depends(verify_api_key)])
 async def list_models():
     """List notebooks as available models."""
     logger.debug("[PROXY] Received request: GET /v1/models")
@@ -169,7 +195,7 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
         await client.close()
 
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
 async def chat_completions(request: ChatCompletionRequest, http_request: Request):
     """OpenAI-compatible chat completions endpoint."""
     logger.debug(f"[PROXY] Received request: POST /v1/chat/completions")
@@ -265,7 +291,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         await client.close()
 
 
-@app.post("/v1/embeddings")
+@app.post("/v1/embeddings", dependencies=[Depends(verify_api_key)])
 async def embeddings():
     """Embeddings endpoint - not supported by NotebookLM."""
     raise HTTPException(
@@ -274,7 +300,7 @@ async def embeddings():
     )
 
 
-@app.get("/v1/sessions")
+@app.get("/v1/sessions", dependencies=[Depends(verify_api_key)])
 async def list_sessions():
     """List all active sessions (for debugging)."""
     if not app.state.session_store:
@@ -287,7 +313,7 @@ async def list_sessions():
     }
 
 
-@app.delete("/v1/sessions/{chat_id}")
+@app.delete("/v1/sessions/{chat_id}", dependencies=[Depends(verify_api_key)])
 async def delete_session(chat_id: str):
     """Delete a specific session."""
     if not app.state.session_store:
@@ -300,7 +326,7 @@ async def delete_session(chat_id: str):
     return {"status": "deleted", "chat_id": chat_id}
 
 
-@app.get("/v1/sessions/stats")
+@app.get("/v1/sessions/stats", dependencies=[Depends(verify_api_key)])
 async def session_stats():
     """Get session statistics."""
     if not app.state.session_store:

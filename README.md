@@ -191,6 +191,19 @@ claude mcp add --scope user notebooklm-mcp uv run nlm-proxy serve mcp
 
 ### 4. Run OpenAI Proxy
 
+**Required:** Set an API key (can be any value, used for client authentication):
+
+```bash
+export NLM_PROXY_OPENAI_API_KEY="your-secret-key"
+```
+
+Or add to `~/.nlm-proxy/.env`:
+```bash
+NLM_PROXY_OPENAI_API_KEY=your-secret-key
+```
+
+**Start the server:**
+
 ```bash
 # Start the proxy server
 nlm-proxy serve openai --port 8080
