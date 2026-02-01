@@ -57,7 +57,9 @@ class AuthTokens:
 
 def get_cache_path() -> Path:
     """Get the path to the auth cache file."""
-    cache_dir = Path.home() / ".nlm-proxy"
+    from nlm_proxy.core.config import get_shared_settings
+
+    cache_dir = get_shared_settings().auth_dir
     cache_dir.mkdir(exist_ok=True)
     return cache_dir / "auth.json"
 
