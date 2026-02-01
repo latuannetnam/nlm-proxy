@@ -48,7 +48,7 @@ dev = [
 ]
 
 [project.scripts]
-nlm-proxy = "nlm_proxy.cli:main"
+nlm-proxy = "nlm_proxy.cli:main_cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nlm_proxy"]
