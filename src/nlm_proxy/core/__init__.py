@@ -1,5 +1,7 @@
 """Core NotebookLM client library."""
 
+from .config import Settings, LoggingSettings, get_settings, get_logging_settings
+from .logging import setup_logging, get_logger, reset_logging
 from .constants import CodeMapper
 from .exceptions import (
     NLMProxyError,
@@ -23,6 +25,16 @@ from .auth import (
 from .client import NotebookLMClient, Notebook, ConversationTurn, SOURCE_ADD_TIMEOUT
 
 __all__ = [
+    # Config
+    "Settings",
+    "LoggingSettings",
+    "get_settings",
+    "get_logging_settings",
+    # Logging
+    "setup_logging",
+    "get_logger",
+    "reset_logging",
+    # Constants
     "CodeMapper",
     "NLMProxyError",
     "AuthenticationError",

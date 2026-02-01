@@ -6,7 +6,6 @@ Internal API. See CLAUDE.md for full documentation.
 
 import asyncio
 import json
-import logging
 import os
 import random
 import re
@@ -20,9 +19,9 @@ import httpx
 
 from nlm_proxy.core import constants
 
-# Configure logger (API internals only logged at DEBUG level, usually disabled)
-logger = logging.getLogger("notebooklm_mcp.api")
-logger.setLevel(logging.WARNING)  # Suppress internal API logs by default
+# Import logging directly to avoid circular import with core.__init__
+import logging
+logger = logging.getLogger("nlm_proxy.api")
 
 # RPC ID to method name mapping for debug logging
 RPC_NAMES = {

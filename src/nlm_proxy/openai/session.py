@@ -1,11 +1,12 @@
 """Session store for maintaining NotebookLM conversation state across Open WebUI chats."""
 
-import logging
 import threading
 import time
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from nlm_proxy.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class SessionStore:

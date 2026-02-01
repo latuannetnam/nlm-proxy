@@ -775,6 +775,7 @@ version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "pydantic-settings" },
     { name = "websocket-client" },
 ]
 
@@ -802,6 +803,7 @@ requires-dist = [
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=0.1.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "nlm-proxy", extras = ["mcp", "openai"], marker = "extra == 'all'" },
+    { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "uvicorn", marker = "extra == 'openai'", specifier = ">=0.23.0" },

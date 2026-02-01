@@ -1,7 +1,6 @@
 """OpenAI-compatible proxy server for NotebookLM."""
 
 import json
-import logging
 import time
 import uuid
 
@@ -10,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from nlm_proxy.core import NotebookLMClient
 from nlm_proxy.core.auth import load_cached_tokens
+from nlm_proxy.core.logging import get_logger
 from nlm_proxy.openai.session import SessionStore
 from nlm_proxy.openai.types import (
     ChatCompletionRequest,
@@ -22,7 +22,7 @@ from nlm_proxy.openai.types import (
     Usage,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 app = FastAPI(
     title="NotebookLM OpenAI Proxy",
@@ -313,14 +313,11 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     """Run the OpenAI-compatible proxy server."""
     # Initialize session store with configured TTL
     app.state.session_store = SessionStore(ttl_seconds=session_ttl)
-    logger.info(f"[SESSION] Session store initialized with TTL={session_ttl}s ({session_ttl/3600:.1f} hours)")
+    logger.info(f"Session store initialized with TTL={session_ttl}s ({session_ttl/3600:.1f} hours)")
 
     import uvicorn
-    import logging
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+
+    # Logging is now configured centrally via setup_logging() in cli.py
 
     try:
         uvicorn.run(app, host=host, port=port)

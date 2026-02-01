@@ -282,6 +282,47 @@ nlm-proxy serve openai [OPTIONS]
   --session-ttl SECONDS    # Session TTL (default: 86400 = 24h)
 ```
 
+## Logging Configuration
+
+Control logging output and verbosity through environment variables or `.env` file.
+
+### Quick Setup
+
+Create `~/.nlm-proxy/.env` or `.env` in project root:
+
+```bash
+# Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+NLM_PROXY_LOG_LEVEL=INFO
+
+# Log file path (leave empty to disable file logging)
+NLM_PROXY_LOG_FILE=~/.nlm-proxy/logs/nlm-proxy.log
+
+# Max file size before rotation (default: 10 MB)
+NLM_PROXY_LOG_MAX_SIZE=10485760
+
+# Number of rotated files to keep
+NLM_PROXY_LOG_BACKUP_COUNT=5
+```
+
+### Usage Examples
+
+```bash
+# Enable debug logging via CLI flag
+nlm-proxy serve mcp --debug
+
+# Or via environment variable
+export NLM_PROXY_LOG_LEVEL=DEBUG
+nlm-proxy serve mcp
+
+# Disable file logging (console only)
+export NLM_PROXY_LOG_FILE=""
+nlm-proxy serve openai
+```
+
+**Outputs:**
+- Console (stderr) - Always enabled
+- Log file - Optional, with automatic rotation
+
 ## Architecture
 
 ```

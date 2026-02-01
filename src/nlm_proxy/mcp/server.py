@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import functools
 import json
-import logging
 import os
 from typing import Any
 
@@ -14,10 +13,11 @@ from starlette.responses import JSONResponse
 
 from nlm_proxy.core import NotebookLMClient, load_cached_tokens, AuthTokens, save_tokens_to_cache, get_cache_path
 from nlm_proxy.core import constants
+from nlm_proxy.core.logging import get_logger
 from nlm_proxy import __version__
 
 # MCP request/response logger
-mcp_logger = logging.getLogger("nlm_proxy.mcp")
+mcp_logger = get_logger("nlm_proxy.mcp")
 
 # Initialize MCP server
 mcp = FastMCP(
@@ -2061,33 +2061,10 @@ def main(debug: bool = False, transport: str = "stdio", port: int = 8000):
     global _query_timeout
     _query_timeout = query_timeout
 
-    # Configure logging
+    # Logging is now configured centrally via setup_logging() in cli.py
+    # The debug flag is passed to setup_logging() before this function is called
     if debug:
-        logging.basicConfig(
-            level=logging.WARNING,  # Suppress most logs
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-
-        # Shared handler and formatter for debug loggers
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        ))
-
-        # Enable MCP request/response logging
-        mcp_logger.setLevel(logging.DEBUG)
-        mcp_logger.addHandler(handler)
-        mcp_logger.propagate = False  # Prevent duplicate logging via root logger
-
-        # Enable API request/response logging (between MCP server and NotebookLM API)
-        api_logger = logging.getLogger("nlm_proxy.api")
-        api_logger.setLevel(logging.DEBUG)
-        api_logger.addHandler(handler)
-        api_logger.propagate = False  # Prevent duplicate logging via root logger
-
-        print("Debug logging: ENABLED (MCP tool calls + NotebookLM API requests/responses)")
+        mcp_logger.debug("Debug logging: ENABLED (MCP tool calls + NotebookLM API requests/responses)")
 
     if transport == "http":
         print(f"Starting NotebookLM MCP server (HTTP) on http://{host}:{port}{path}")

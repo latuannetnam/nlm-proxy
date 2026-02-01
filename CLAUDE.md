@@ -209,6 +209,62 @@ uv run nlm-proxy auth test
 
 When API calls fail with auth errors, re-extract fresh cookies using any of the methods above.
 
+## Logging Configuration
+
+The project uses a unified logging system with configuration via `.env` file.
+
+### Configuration File
+
+Create a `.env` file in `~/.nlm-proxy/.env` or in the project root:
+
+```bash
+# Logging Configuration
+NLM_PROXY_LOG_LEVEL=INFO                              # DEBUG, INFO, WARNING, ERROR, CRITICAL
+NLM_PROXY_LOG_FILE=~/.nlm-proxy/logs/nlm-proxy.log   # Log file path (leave empty to disable file logging)
+NLM_PROXY_LOG_FORMAT=%(asctime)s - %(name)s - %(levelname)s - %(message)s
+NLM_PROXY_LOG_MAX_SIZE=10485760                       # 10 MB - Max file size before rotation
+NLM_PROXY_LOG_BACKUP_COUNT=5                          # Number of rotated log files to keep
+```
+
+### Logger Hierarchy
+
+All loggers use the `nlm_proxy.*` namespace:
+
+```
+nlm_proxy              (root - all logs flow here)
+├── nlm_proxy.mcp      (MCP server)
+├── nlm_proxy.openai   (OpenAI proxy)
+├── nlm_proxy.api      (API client)
+└── nlm_proxy.session  (Session store)
+```
+
+### Usage
+
+**Console output only:**
+```bash
+# Set log level via environment variable
+export NLM_PROXY_LOG_LEVEL=DEBUG
+nlm-proxy serve mcp
+
+# Or use --debug flag (overrides .env setting)
+nlm-proxy serve mcp --debug
+```
+
+**Dual output (console + file):**
+```bash
+# Configure in .env file (default behavior)
+NLM_PROXY_LOG_LEVEL=INFO
+NLM_PROXY_LOG_FILE=~/.nlm-proxy/logs/nlm-proxy.log
+
+nlm-proxy serve mcp
+```
+
+### Log File Rotation
+
+- Log files automatically rotate when reaching `NLM_PROXY_LOG_MAX_SIZE`
+- Keeps `NLM_PROXY_LOG_BACKUP_COUNT` backup files (e.g., `nlm-proxy.log.1`, `nlm-proxy.log.2`)
+- Old backups are deleted automatically
+
 ## Architecture
 
 ```

@@ -6,12 +6,18 @@ import sys
 
 def cmd_serve_mcp(args):
     """Run the MCP server."""
+    from nlm_proxy.core import setup_logging
+    setup_logging(debug=args.debug)
+
     from nlm_proxy.mcp import run_server
     run_server(debug=args.debug, transport=args.transport, port=args.port)
 
 
 def cmd_serve_openai(args):
     """Run the OpenAI proxy server."""
+    from nlm_proxy.core import setup_logging
+    setup_logging()
+
     from nlm_proxy.openai import run_server
     run_server(host=args.host, port=args.port, session_ttl=args.session_ttl)
 
