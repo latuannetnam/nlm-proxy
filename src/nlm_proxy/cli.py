@@ -16,7 +16,7 @@ def cmd_serve_mcp(args):
 def cmd_serve_openai(args):
     """Run the OpenAI proxy server."""
     from nlm_proxy.core import setup_logging
-    setup_logging()
+    setup_logging(debug=args.debug)
 
     from nlm_proxy.openai import run_server
     run_server(host=args.host, port=args.port, session_ttl=args.session_ttl)
@@ -24,6 +24,9 @@ def cmd_serve_openai(args):
 
 def cmd_auth_extract(args):
     """Extract authentication tokens."""
+    from nlm_proxy.core import setup_logging
+    setup_logging(debug=args.debug)
+
     from nlm_proxy.core.auth_cli import run_auth_flow, run_file_cookie_entry
 
     try:
@@ -47,6 +50,9 @@ def cmd_auth_extract(args):
 
 async def cmd_auth_test_async(args):
     """Test if current tokens are valid."""
+    from nlm_proxy.core import setup_logging
+    setup_logging(debug=args.debug)
+
     from nlm_proxy.core import NotebookLMClient
     from nlm_proxy.core.auth import load_cached_tokens
     from nlm_proxy.core.exceptions import AuthenticationError
@@ -114,6 +120,7 @@ def main():
 
     # serve openai
     openai_parser = serve_subparsers.add_parser("openai", help="Run OpenAI proxy")
+    openai_parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     openai_parser.add_argument(
         "--host",
         default="0.0.0.0",
@@ -139,6 +146,7 @@ def main():
 
     # auth extract
     extract_parser = auth_subparsers.add_parser("extract", help="Extract tokens from browser")
+    extract_parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     extract_parser.add_argument(
         "--file",
         nargs="?",
@@ -161,6 +169,7 @@ def main():
 
     # auth test
     test_parser = auth_subparsers.add_parser("test", help="Test current tokens")
+    test_parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     test_parser.set_defaults(func=cmd_auth_test)
 
     args = parser.parse_args()
