@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**NotebookLM MCP Server** - Provides programmatic access to NotebookLM (notebooklm.google.com) using internal APIs. Tested with personal/free tier accounts.
+**NLM Proxy** - Provides programmatic access to NotebookLM (notebooklm.google.com) using internal APIs. Tested with personal/free tier accounts.
 
 ## Quick Commands
 
@@ -28,6 +28,7 @@ Detailed documentation in `.claude/memory/`:
 |--------|--------------|
 | `commands.md` | Full command reference, from-source execution |
 | `architecture.md` | Understanding codebase structure |
+| `configuration.md` | Environment variables, .env files, settings precedence |
 | `authentication.md` | Auth issues, setting up tokens |
 | `mcp-tools.md` | MCP tool reference, confirmation rules |
 | `openai-proxy.md` | OpenAI proxy setup, SDK examples |

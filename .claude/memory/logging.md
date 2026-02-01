@@ -1,8 +1,8 @@
 # Logging Configuration
 
-## Config File
+Part of the unified configuration system. See `configuration.md` for full details.
 
-Create `.env` in `~/.nlm-proxy/.env` or project root:
+## Environment Variables
 
 ```bash
 NLM_PROXY_LOG_LEVEL=INFO

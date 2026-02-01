@@ -4,13 +4,13 @@
 src/nlm_proxy/
 ├── __init__.py       # Package version
 ├── __main__.py       # Module entry point (python -m nlm_proxy)
-├── cli.py            # Unified CLI entry point
+├── cli.py            # Typer CLI (serve mcp, serve openai, auth)
 ├── core/
 │   ├── __init__.py   # Public exports
 │   ├── auth.py       # Token management
 │   ├── auth_cli.py   # CLI authentication commands
 │   ├── client.py     # NotebookLMClient
-│   ├── config.py     # Pydantic settings configuration
+│   ├── config.py     # Pydantic settings (Shared, MCP, OpenAI, Auth, Logging)
 │   ├── constants.py  # Code mappings
 │   ├── exceptions.py # Custom exceptions
 │   └── logging.py    # Centralized logging setup
@@ -26,7 +26,7 @@ src/nlm_proxy/
 
 ## Executables
 
-- `nlm-proxy` - Unified CLI (serve mcp, serve openai, auth commands)
+- `nlm-proxy` - Typer CLI (serve mcp, serve openai, auth commands)
 
 ## Key Components
 
@@ -34,6 +34,16 @@ src/nlm_proxy/
 |--------|---------|
 | `core/client.py` | NotebookLM API client |
 | `core/auth.py` | Token extraction and management |
-| `core/config.py` | Environment-based settings |
+| `core/config.py` | Unified settings (CLI > env > .env > defaults) |
 | `mcp/server.py` | MCP tool definitions |
 | `openai/server.py` | OpenAI-compatible proxy |
+
+## Configuration
+
+Settings loaded via pydantic-settings with precedence:
+1. CLI arguments (highest)
+2. Environment variables
+3. .env files (~/.nlm-proxy/.env, ./.env)
+4. Defaults (lowest)
+
+See `configuration.md` for details.

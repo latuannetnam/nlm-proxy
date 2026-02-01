@@ -26,6 +26,20 @@ uv run pytest
 uv run pytest tests/test_file.py::test_function -v
 ```
 
+## Configuration via Environment
+
+```bash
+# Override defaults with environment variables
+export NLM_PROXY_DEBUG=true
+export NLM_PROXY_MCP_PORT=9000
+export NLM_PROXY_OPENAI_PORT=3000
+
+# CLI args override environment variables
+nlm-proxy serve openai --port 8080  # Uses 8080, not env var
+```
+
+See `configuration.md` for full environment variable reference.
+
 ## From Source (bypasses CLI caching)
 
 ```bash
