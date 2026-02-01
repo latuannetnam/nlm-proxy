@@ -4,10 +4,11 @@ Loads settings from environment variables and .env files.
 Priority: CLI args > environment variables > ~/.nlm-proxy/.env > .env in project root > defaults
 """
 
+import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +26,14 @@ class SharedSettings(BaseSettings):
         description="Directory for auth cache and config",
     )
 
+    @field_validator("auth_dir", mode="before")
+    @classmethod
+    def expand_auth_dir(cls, v: str | Path) -> Path:
+        """Expand ~ in auth_dir path."""
+        if isinstance(v, str):
+            return Path(os.path.expanduser(v))
+        return v
+
     model_config = SettingsConfigDict(
         env_prefix="NLM_PROXY_",
         env_file=_get_env_files(),
@@ -41,6 +50,14 @@ class LoggingSettings(BaseSettings):
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     max_size: int = 10485760  # 10 MB
     backup_count: int = 5
+
+    @field_validator("file", mode="before")
+    @classmethod
+    def expand_log_file(cls, v: str) -> str:
+        """Expand ~ in log file path."""
+        if v and isinstance(v, str):
+            return os.path.expanduser(v)
+        return v
 
     model_config = SettingsConfigDict(
         env_prefix="NLM_PROXY_LOG_",

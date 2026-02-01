@@ -165,6 +165,8 @@ def auth_extract(
             tokens = run_auth_flow(resolved_port, auto_launch=resolved_auto_launch)
 
         raise typer.Exit(0 if tokens else 1)
+    except typer.Exit:
+        raise  # Let typer.Exit pass through without error handling
     except KeyboardInterrupt:
         print("\nCancelled.")
         raise typer.Exit(1)

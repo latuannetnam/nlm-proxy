@@ -57,3 +57,7 @@ CLAUDE.local.md
 .worktrees/
 .claude/settings.local.json
 run*
+
+# Other env files
+.env
+.env.local
