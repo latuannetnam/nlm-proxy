@@ -1,11 +1,36 @@
 """Configuration management using pydantic-settings.
 
 Loads settings from environment variables and .env files.
-Priority: environment variables > ~/.nlm-proxy/.env > .env in project root
+Priority: CLI args > environment variables > ~/.nlm-proxy/.env > .env in project root > defaults
 """
 
 from pathlib import Path
+from typing import Literal
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _get_env_files() -> list[str]:
+    """Return list of .env files to load (earlier files take priority)."""
+    return [".env", str(Path.home() / ".nlm-proxy" / ".env")]
+
+
+class SharedSettings(BaseSettings):
+    """Shared settings across all commands."""
+
+    debug: bool = Field(default=False, description="Enable debug logging")
+    auth_dir: Path = Field(
+        default_factory=lambda: Path.home() / ".nlm-proxy",
+        description="Directory for auth cache and config",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="NLM_PROXY_",
+        env_file=_get_env_files(),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 class LoggingSettings(BaseSettings):
@@ -19,41 +44,112 @@ class LoggingSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="NLM_PROXY_LOG_",
-        env_file=["~/.nlm-proxy/.env", ".env"],
+        env_file=_get_env_files(),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
 
-class Settings(BaseSettings):
-    """Main settings container.
+class MCPSettings(BaseSettings):
+    """MCP server settings."""
 
-    Extensible for future configuration beyond logging.
-    """
+    port: int = Field(default=8000, description="Port for HTTP transport")
+    transport: Literal["stdio", "http"] = Field(
+        default="stdio", description="Transport type"
+    )
 
     model_config = SettingsConfigDict(
-        env_file=["~/.nlm-proxy/.env", ".env"],
+        env_prefix="NLM_PROXY_MCP_",
+        env_file=_get_env_files(),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+class OpenAISettings(BaseSettings):
+    """OpenAI proxy server settings."""
+
+    host: str = Field(default="0.0.0.0", description="Host to bind to")
+    port: int = Field(default=8080, description="Port to listen on")
+    session_ttl: int = Field(
+        default=86400, description="Session TTL in seconds (default: 24h)"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="NLM_PROXY_OPENAI_",
+        env_file=_get_env_files(),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+class AuthSettings(BaseSettings):
+    """Authentication settings."""
+
+    chrome_port: int = Field(default=9222, description="Chrome DevTools port")
+    auto_launch: bool = Field(default=True, description="Auto-launch Chrome for auth")
+
+    model_config = SettingsConfigDict(
+        env_prefix="NLM_PROXY_AUTH_",
+        env_file=_get_env_files(),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
 
 # Singleton instances
-_settings: Settings | None = None
-_logging_settings: LoggingSettings | None = None
+_shared: SharedSettings | None = None
+_logging: LoggingSettings | None = None
+_mcp: MCPSettings | None = None
+_openai: OpenAISettings | None = None
+_auth: AuthSettings | None = None
 
 
-def get_settings() -> Settings:
-    """Get the global settings instance."""
-    global _settings
-    if _settings is None:
-        _settings = Settings()
-    return _settings
+def get_shared_settings() -> SharedSettings:
+    """Get the shared settings instance."""
+    global _shared
+    if _shared is None:
+        _shared = SharedSettings()
+    return _shared
 
 
 def get_logging_settings() -> LoggingSettings:
     """Get the logging settings instance."""
-    global _logging_settings
-    if _logging_settings is None:
-        _logging_settings = LoggingSettings()
-    return _logging_settings
+    global _logging
+    if _logging is None:
+        _logging = LoggingSettings()
+    return _logging
+
+
+def get_mcp_settings() -> MCPSettings:
+    """Get the MCP settings instance."""
+    global _mcp
+    if _mcp is None:
+        _mcp = MCPSettings()
+    return _mcp
+
+
+def get_openai_settings() -> OpenAISettings:
+    """Get the OpenAI settings instance."""
+    global _openai
+    if _openai is None:
+        _openai = OpenAISettings()
+    return _openai
+
+
+def get_auth_settings() -> AuthSettings:
+    """Get the auth settings instance."""
+    global _auth
+    if _auth is None:
+        _auth = AuthSettings()
+    return _auth
+
+
+# Keep backward compatibility aliases
+Settings = SharedSettings
+_settings: Settings | None = None
+
+
+def get_settings() -> Settings:
+    """Get the global settings instance (alias for get_shared_settings)."""
+    return get_shared_settings()
