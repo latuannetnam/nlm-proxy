@@ -57,7 +57,7 @@ class AuthTokens:
 
 def get_cache_path() -> Path:
     """Get the path to the auth cache file."""
-    cache_dir = Path.home() / ".notebooklm-mcp"
+    cache_dir = Path.home() / ".nlm-proxy"
     cache_dir.mkdir(exist_ok=True)
     return cache_dir / "auth.json"
 
