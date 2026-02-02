@@ -34,6 +34,39 @@ Connect **any OpenAI client** (Open WebUI, Python SDK, etc.) to NotebookLM:
 | **Session Persistence** | Maintains conversation context across queries |
 | **Multi-notebook** | Each notebook appears as a separate model |
 
+### Smart Request Routing
+Automatically route requests to the best backend using AI-powered classification:
+
+| Feature | Description |
+|---------|-------------|
+| **Auto-Classification** | LLM classifies queries as knowledge lookups or general tasks |
+| **Notebook Selection** | Automatically selects the most relevant notebook for knowledge queries |
+| **LLM Passthrough** | General tasks routed to external LLM (e.g., GPT-4o-mini) |
+| **Cached Summaries** | Notebook summaries cached with configurable TTL |
+
+**Configuration:**
+```bash
+# Add to ~/.nlm-proxy/.env
+NLM_PROXY_ROUTING_LLM_API_KEY=sk-your-openai-key
+NLM_PROXY_ROUTING_LLM_MODEL=gpt-4o-mini
+```
+
+**Usage:**
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="your-key")
+
+# Use "smart-router" model for automatic routing
+response = client.chat.completions.create(
+    model="smart-router",
+    messages=[{"role": "user", "content": "What does the research say about X?"}],
+    stream=True
+)
+```
+
+See [Smart Routing Architecture](docs/smart-routing-architecture.md) for details.
+
 ## Installation
 
 ### Basic Installation

@@ -32,6 +32,7 @@ Detailed documentation in `.claude/memory/`:
 | `authentication.md` | Auth issues, setting up tokens |
 | `mcp-tools.md` | MCP tool reference, confirmation rules |
 | `openai-proxy.md` | OpenAI proxy setup, SDK examples |
+| `smart-routing.md` | Smart routing configuration, LLM client, router |
 | `logging.md` | Configuring logs, debugging |
 | `troubleshooting.md` | Common errors and fixes |
 
