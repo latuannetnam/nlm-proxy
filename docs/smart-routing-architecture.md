@@ -85,13 +85,40 @@ await client.close()
 
 ### 2. NotebookCache (`openai/notebook_cache.py`)
 
-Thread-safe TTL cache for notebook summaries to avoid repeated API calls.
+Proactive thread-safe cache for notebook summaries with background refresh.
 
 **Features:**
-- Configurable TTL (default: 1 hour)
-- Thread-safe operations with locking
-- Automatic expiration on access
+- **Proactive initialization**: Blocking fetch at server startup to warm the cache
+- **Background refresh**: Automatic refresh at 80% of TTL (prevents expiration)
+- **Thread-safe operations**: All cache operations protected with locks
+- **Graceful shutdown**: Background thread stops cleanly on server shutdown
+- **Shared instance**: Single cache instance shared across all router instances via `app.state`
 - Stores: id, title, summary, topics, cached_at
+
+**Architecture:**
+```python
+# Server startup (in openai/server.py)
+@app.on_event("startup")
+async def startup():
+    # Create shared cache - blocks until initial fetch completes
+    app.state.notebook_cache = NotebookCache(
+        nlm_client=nlm_client,
+        ttl_seconds=config.summary_cache_ttl
+    )
+    # Background refresh thread started automatically
+
+# Router uses shared cache (always warm)
+router = SmartRouter(
+    nlm_client=nlm_client,
+    notebook_cache=app.state.notebook_cache,  # Shared cache
+    ...
+)
+
+# Background refresh loop (internal to NotebookCache)
+while not shutdown:
+    sleep(ttl * 0.8)  # Refresh at 80% of TTL
+    fetch_all_summaries()  # Refresh before expiration
+```
 
 **Data Structure:**
 ```python
@@ -103,6 +130,12 @@ class NotebookInfo:
     topics: list[str]
     cached_at: float
 ```
+
+**Cache Lifecycle:**
+1. **Server startup**: NotebookCache created, performs initial blocking fetch
+2. **Background thread**: Starts automatically, refreshes every 80% of TTL
+3. **Router requests**: `get_all()` returns warm cache (no API calls needed)
+4. **Server shutdown**: Background thread stops gracefully
 
 ### 3. SmartRouter (`openai/router.py`)
 
@@ -330,10 +363,23 @@ If fetching a notebook summary fails:
 
 ## Performance Considerations
 
-### Caching Strategy
-- Notebook summaries cached for 1 hour (configurable)
-- First request after cache expiry fetches all summaries
-- Subsequent requests use cache
+### Proactive Caching Strategy
+- **Initial fetch**: All notebook summaries fetched at server startup (blocking)
+- **Background refresh**: Cache refreshed automatically at 80% of TTL
+- **Always warm**: Cache never expires during normal operation
+- **No request delays**: Routing requests never wait for cache population
+
+**Cache Timeline:**
+```
+Server Start          Refresh 1 (48 min)    Refresh 2 (96 min)
+     |                      |                      |
+     v                      v                      v
+[Initial Fetch]------[Background Refresh]---[Background Refresh]---...
+     |                      |                      |
+  (blocks)            (async in bg)          (async in bg)
+     |                      |                      |
+Cache TTL: 60 min    Cache still fresh      Cache still fresh
+```
 
 ### LLM Call Optimization
 - Classification uses `max_tokens=50` (single word response)
@@ -341,8 +387,9 @@ If fetching a notebook summary fails:
 - `temperature=0.0` for deterministic classification
 
 ### Parallel Operations
-- Notebook list and summary fetches are sequential (API limitation)
-- Consider pre-warming cache on server startup for large notebook collections
+- Notebook summaries fetched sequentially (API limitation)
+- Background refresh runs independently from request handling
+- No blocking on request path after initial startup
 
 ## Manual Verification
 

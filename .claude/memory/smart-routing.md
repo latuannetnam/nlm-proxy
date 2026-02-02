@@ -15,7 +15,7 @@ When a client uses `model="smart-router"`, the proxy:
 |------|---------|
 | `core/config.py` | `SmartRoutingSettings` class with env var bindings |
 | `core/llm_client.py` | `ExternalLLMClient` using OpenAI SDK |
-| `openai/notebook_cache.py` | `NotebookCache` with TTL expiration |
+| `openai/notebook_cache.py` | `NotebookCache` with proactive background refresh |
 | `openai/router.py` | `SmartRouter`, `RequestType`, `RoutingDecision` |
 | `openai/prompts/__init__.py` | `load_prompt()` function |
 | `openai/prompts/classify_request.txt` | Classification prompt template |
@@ -48,6 +48,17 @@ All use prefix `NLM_PROXY_ROUTING_`:
 - `RequestType.NOTEBOOKLM` - Knowledge queries routed to NotebookLM
 - `RequestType.LLM_TASK` - General tasks passed to external LLM
 
+## Notebook Cache
+
+The `NotebookCache` uses **proactive background refresh** to ensure the cache is always warm:
+
+- **Initial fetch**: Blocking fetch at server startup to pre-populate cache
+- **Background refresh**: Automatic refresh at 80% of TTL (prevents expiration)
+- **Thread-safe**: All operations protected with locks
+- **Graceful shutdown**: Background thread stops cleanly on server shutdown
+
+Cache is shared across all router instances via `app.state.notebook_cache`.
+
 ## Quick Reference
 
 ```python
@@ -55,6 +66,12 @@ All use prefix `NLM_PROXY_ROUTING_`:
 router.route(query) -> RoutingDecision
   -> classify_request(query) -> RequestType
   -> if NOTEBOOKLM: select_notebook(query) -> notebook_id
+
+# Notebook cache (shared via app.state)
+cache = NotebookCache(nlm_client, ttl_seconds=3600)
+# - Fetches all notebooks at init (blocking)
+# - Refreshes in background before TTL expires
+# - get_all() always returns warm cache
 ```
 
 See `docs/smart-routing-architecture.md` for detailed architecture diagrams.

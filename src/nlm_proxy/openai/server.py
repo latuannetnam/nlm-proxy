@@ -13,6 +13,7 @@ from nlm_proxy.core import NotebookLMClient
 from nlm_proxy.core.auth import load_cached_tokens
 from nlm_proxy.core.config import get_openai_settings, get_routing_settings
 from nlm_proxy.core.logging import get_logger
+from nlm_proxy.openai.notebook_cache import NotebookCache
 from nlm_proxy.openai.router import SmartRouter, RequestType
 from nlm_proxy.openai.session import SessionStore
 from nlm_proxy.openai.types import (
@@ -36,6 +37,8 @@ app = FastAPI(
 
 # Initialize session store (will be configured with TTL in main())
 app.state.session_store = None
+# Initialize notebook cache for smart routing (will be configured in main())
+app.state.notebook_cache = None
 
 
 def verify_api_key(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -149,7 +152,14 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
         messages = [{"role": m.role, "content": m.content} for m in request.messages]
         stream = await router.llm_client.stream(messages)
         async for chunk in stream:
-            delta_content = chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
+            # Safety check: some chunks may have empty choices array
+            if not chunk.choices:
+                continue
+
+            # Safety check: delta and content may be None
+            delta = chunk.choices[0].delta
+            delta_content = delta.content if delta and delta.content else ""
+
             if delta_content:
                 openai_chunk = ChatCompletionChunk(
                     id=chunk_id,
@@ -225,13 +235,20 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
     routing_settings = get_routing_settings()
     client = await get_client()
 
+    # Use shared notebook cache from app.state
+    if not app.state.notebook_cache:
+        raise HTTPException(
+            status_code=503,
+            detail="Notebook cache not initialized. Smart routing is not available."
+        )
+
     router = SmartRouter(
         nlm_client=client,
+        notebook_cache=app.state.notebook_cache,
         llm_base_url=routing_settings.llm_base_url,
         llm_api_key=routing_settings.llm_api_key,
         llm_model=routing_settings.llm_model,
-        allowed_notebooks=routing_settings.allowed_notebooks,
-        cache_ttl=routing_settings.summary_cache_ttl
+        allowed_notebooks=routing_settings.allowed_notebooks
     )
 
     # Extract chat_id from headers or request metadata (same as regular endpoint)
@@ -440,7 +457,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         raise HTTPException(status_code=400, detail="No user message found")
 
     query_text = user_messages[-1].content
-    logger.debug(f"[PROXY] Extracted query: {query_text[:200]}{'...' if len(query_text) > 200 else ''}")
+    logger.debug(f"[PROXY] Extracted query: {query_text[:500]}{'...' if len(query_text) > 500 else ''}")
 
     client = await get_client()
 
@@ -545,6 +562,31 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     app.state.session_store = SessionStore(ttl_seconds=session_ttl)
     logger.info(f"Session store initialized with TTL={session_ttl}s ({session_ttl/3600:.1f} hours)")
 
+    # Initialize notebook cache with proactive refresh for smart routing
+    # Smart routing is enabled if llm_api_key is configured
+    routing_settings = get_routing_settings()
+    if routing_settings.llm_api_key:
+        try:
+            tokens = load_cached_tokens()
+            if tokens and tokens.cookies:
+                nlm_client = NotebookLMClient(
+                    cookies=tokens.cookies,
+                    csrf_token=tokens.csrf_token or "",
+                    session_id=tokens.session_id or ""
+                )
+                app.state.notebook_cache = NotebookCache(
+                    nlm_client=nlm_client,
+                    ttl_seconds=routing_settings.summary_cache_ttl,
+                    allowed_notebooks=routing_settings.allowed_notebooks
+                )
+                logger.info(f"Notebook cache initialized with TTL={routing_settings.summary_cache_ttl}s")
+            else:
+                logger.warning("Smart routing configured but no auth tokens found - cache not initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize notebook cache: {e}")
+    else:
+        logger.debug("Smart routing not configured (no llm_api_key) - notebook cache not initialized")
+
     import uvicorn
 
     # Logging is now configured centrally via setup_logging() in cli.py
@@ -552,6 +594,9 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     try:
         uvicorn.run(app, host=host, port=port)
     finally:
+        # Cleanup notebook cache on shutdown
+        if app.state.notebook_cache:
+            app.state.notebook_cache.shutdown()
         # Cleanup session store on shutdown
         if app.state.session_store:
             app.state.session_store.shutdown()

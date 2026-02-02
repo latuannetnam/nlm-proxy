@@ -36,55 +36,37 @@ class SmartRouter:
     def __init__(
         self,
         nlm_client: "NotebookLMClient",
+        notebook_cache: NotebookCache,
         llm_base_url: str,
         llm_api_key: str,
         llm_model: str,
-        allowed_notebooks: list[str] | None = None,
-        cache_ttl: int = 3600
+        allowed_notebooks: list[str] | None = None
     ):
+        """Initialize the router with a shared notebook cache.
+
+        Args:
+            nlm_client: NotebookLM client for queries
+            notebook_cache: Shared cache with proactive refresh (from app.state)
+            llm_base_url: Base URL for external LLM
+            llm_api_key: API key for external LLM
+            llm_model: Model name for external LLM
+            allowed_notebooks: Optional list of allowed notebook IDs
+        """
         self.nlm_client = nlm_client
+        self.notebook_cache = notebook_cache
         self.llm_client = ExternalLLMClient(llm_base_url, llm_api_key, llm_model)
-        self.notebook_cache = NotebookCache(ttl_seconds=cache_ttl)
         self.allowed_notebooks = allowed_notebooks or []
 
     async def _ensure_notebooks_cached(self) -> list:
-        """Ensure notebook summaries are cached, refresh if needed."""
+        """Get cached notebooks - cache is always warm due to proactive refresh."""
         cached = self.notebook_cache.get_all()
         if cached:
             logger.debug(f"[ROUTER] Using {len(cached)} cached notebooks")
             return cached
 
-        logger.debug("[ROUTER] Cache empty, fetching notebooks from NotebookLM")
-        notebooks = await self.nlm_client.list_notebooks()
-        logger.debug(f"[ROUTER] Found {len(notebooks)} notebooks")
-
-        # Filter if configured
-        if self.allowed_notebooks:
-            notebooks = [nb for nb in notebooks if nb.id in self.allowed_notebooks]
-            logger.debug(f"[ROUTER] Filtered to {len(notebooks)} allowed notebooks")
-
-        # Get summaries for each notebook
-        for nb in notebooks:
-            try:
-                logger.debug(f"[ROUTER] Fetching summary for notebook: {nb.title} ({nb.id})")
-                summary_data = await self.nlm_client.get_notebook_summary(nb.id)
-                self.notebook_cache.set(
-                    notebook_id=nb.id,
-                    title=nb.title,
-                    summary=summary_data.get("summary", ""),
-                    topics=summary_data.get("suggested_topics", [])
-                )
-            except Exception as e:
-                logger.warning(f"[ROUTER] Failed to get summary for notebook {nb.id}: {e}")
-                # Cache with just the title
-                self.notebook_cache.set(
-                    notebook_id=nb.id,
-                    title=nb.title,
-                    summary="",
-                    topics=[]
-                )
-
-        return self.notebook_cache.get_all()
+        # This should rarely happen since cache is proactively refreshed
+        logger.warning("[ROUTER] Cache unexpectedly empty - notebooks may not be available")
+        return []
 
     async def classify_request(self, query: str) -> RequestType:
         """Classify the request type using external LLM."""
