@@ -26,6 +26,15 @@ class ExternalLLMClient:
         self.model = model
         self._client: AsyncOpenAI | None = None
 
+    def _uses_max_completion_tokens(self) -> bool:
+        """Check if model uses max_completion_tokens instead of max_tokens.
+
+        GPT-5.x and reasoning models (o1, o3) require max_completion_tokens.
+        Older models (GPT-4.x, GPT-4o, etc.) use max_tokens.
+        """
+        model_lower = self.model.lower()
+        return model_lower.startswith(("gpt-5", "o1", "o3"))
+
     @property
     def client(self) -> AsyncOpenAI:
         """Get or create the OpenAI client (lazy initialization)."""
@@ -42,12 +51,19 @@ class ExternalLLMClient:
         logger.debug(f"[LLM] Calling complete: model={self.model}, max_tokens={max_tokens}")
         logger.debug(f"[LLM] Request prompt: {prompt[:200]}{'...' if len(prompt) > 200 else ''}")
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=0.0
-        )
+        # Use appropriate parameter based on model version
+        params = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0
+        }
+
+        if self._uses_max_completion_tokens():
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+
+        response = await self.client.chat.completions.create(**params)
         result = response.choices[0].message.content.strip()
 
         logger.debug(f"[LLM] Response: {result[:200]}{'...' if len(result) > 200 else ''}")
