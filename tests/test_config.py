@@ -260,3 +260,42 @@ class TestSingletonAccessors:
         s1 = config.get_auth_settings()
         s2 = config.get_auth_settings()
         assert s1 is s2
+
+
+class TestSmartRoutingSettings:
+    """Test SmartRoutingSettings class."""
+
+    def test_smart_routing_settings_defaults(self):
+        """Test SmartRoutingSettings has correct defaults."""
+        from nlm_proxy.core.config import SmartRoutingSettings
+
+        settings = SmartRoutingSettings(llm_api_key="test-key")
+
+        assert settings.llm_base_url == "https://api.openai.com/v1"
+        assert settings.llm_api_key == "test-key"
+        assert settings.llm_model == "gpt-4o-mini"
+        assert settings.router_model_name == "smart-router"
+        assert settings.allowed_notebooks == []
+        assert settings.summary_cache_ttl == 3600
+
+    def test_smart_routing_settings_from_env(self, monkeypatch):
+        """Test SmartRoutingSettings loads from environment."""
+        monkeypatch.setenv("NLM_PROXY_ROUTING_LLM_BASE_URL", "https://custom.api/v1")
+        monkeypatch.setenv("NLM_PROXY_ROUTING_LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("NLM_PROXY_ROUTING_LLM_MODEL", "gpt-4o")
+
+        from nlm_proxy.core.config import SmartRoutingSettings
+        settings = SmartRoutingSettings()
+
+        assert settings.llm_base_url == "https://custom.api/v1"
+        assert settings.llm_api_key == "sk-test"
+        assert settings.llm_model == "gpt-4o"
+
+    def test_get_routing_settings_returns_same_instance(self):
+        """get_routing_settings should return singleton."""
+        import nlm_proxy.core.config as config
+        config._routing = None  # Reset
+
+        s1 = config.get_routing_settings()
+        s2 = config.get_routing_settings()
+        assert s1 is s2

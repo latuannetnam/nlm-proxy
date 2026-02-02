@@ -115,12 +115,49 @@ class AuthSettings(BaseSettings):
     )
 
 
+class SmartRoutingSettings(BaseSettings):
+    """Smart routing configuration for LLM-based request classification."""
+
+    llm_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="Base URL for external OpenAI-compatible LLM"
+    )
+    llm_api_key: str = Field(
+        default="",
+        description="API key for external LLM"
+    )
+    llm_model: str = Field(
+        default="gpt-4o-mini",
+        description="Model to use for classification and routing"
+    )
+    router_model_name: str = Field(
+        default="smart-router",
+        description="Model name that triggers smart routing"
+    )
+    allowed_notebooks: list[str] = Field(
+        default_factory=list,
+        description="List of notebook IDs to include (empty = all)"
+    )
+    summary_cache_ttl: int = Field(
+        default=3600,
+        description="TTL for notebook summary cache in seconds"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="NLM_PROXY_ROUTING_",
+        env_file=_get_env_files(),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 # Singleton instances
 _shared: SharedSettings | None = None
 _logging: LoggingSettings | None = None
 _mcp: MCPSettings | None = None
 _openai: OpenAISettings | None = None
 _auth: AuthSettings | None = None
+_routing: SmartRoutingSettings | None = None
 
 
 def get_shared_settings() -> SharedSettings:
@@ -161,6 +198,14 @@ def get_auth_settings() -> AuthSettings:
     if _auth is None:
         _auth = AuthSettings()
     return _auth
+
+
+def get_routing_settings() -> SmartRoutingSettings:
+    """Get the smart routing settings instance."""
+    global _routing
+    if _routing is None:
+        _routing = SmartRoutingSettings()
+    return _routing
 
 
 # Keep backward compatibility aliases
