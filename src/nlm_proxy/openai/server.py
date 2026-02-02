@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from nlm_proxy.core import NotebookLMClient
 from nlm_proxy.core.auth import load_cached_tokens
-from nlm_proxy.core.config import get_openai_settings
+from nlm_proxy.core.config import get_openai_settings, get_routing_settings
 from nlm_proxy.core.logging import get_logger
 from nlm_proxy.openai.session import SessionStore
 from nlm_proxy.openai.types import (
@@ -87,25 +87,40 @@ async def health():
 async def list_models():
     """List notebooks as available models."""
     logger.debug("[PROXY] Received request: GET /v1/models")
+
+    routing_settings = get_routing_settings()
+
     client = await get_client()
     try:
         logger.debug("[NOTEBOOKLM] Calling list_notebooks()")
         notebooks = await client.list_notebooks()
         logger.debug(f"[NOTEBOOKLM] Response: {len(notebooks)} notebooks found")
 
+        # Smart router model
+        smart_router_model = {
+            "id": routing_settings.router_model_name,
+            "object": "model",
+            "created": 0,
+            "owned_by": "nlm-proxy",
+            "name": "Smart Router",
+            "description": "AI-powered routing to best notebook or external LLM",
+        }
+
+        notebook_models = [
+            {
+                "id": nb.id,
+                "object": "model",
+                "created": 0,
+                "owned_by": "notebooklm",
+                "name": nb.title,
+                "source_count": nb.source_count,
+            }
+            for nb in notebooks
+        ]
+
         response = {
             "object": "list",
-            "data": [
-                {
-                    "id": nb.id,
-                    "object": "model",
-                    "created": 0,
-                    "owned_by": "notebooklm",
-                    "name": nb.title,
-                    "source_count": nb.source_count,
-                }
-                for nb in notebooks
-            ]
+            "data": [smart_router_model] + notebook_models
         }
         logger.debug(f"[PROXY] Returning {len(response['data'])} models")
         return response
