@@ -174,13 +174,47 @@ POST /v1/chat/completions
   │
   ├─ model == "smart-router"
   │     └─> handle_smart_routing()
+  │           ├─> Extract chat_id from headers/metadata
+  │           ├─> Lookup conversation_id from SessionStore
   │           ├─> router.route(query)
   │           ├─> If LLM_TASK: stream from external LLM
   │           └─> If NOTEBOOKLM: stream from selected notebook
+  │                 └─> Save conversation_id to SessionStore
   │
   └─ model == notebook_id
         └─> Direct NotebookLM query (existing flow)
 ```
+
+### 6. Session Mapping (Conversation Continuity)
+
+The smart router supports mapping Open Web UI `chat_id` to NotebookLM `conversation_id` for multi-turn conversations.
+
+**How it works:**
+
+1. **Extract `chat_id`**: From `X-OpenWebUI-Chat-Id` header or `metadata.chat_id` in request body
+2. **Lookup**: Check `SessionStore` for existing `conversation_id` mapped to this `chat_id`
+3. **Reuse**: If found, pass `conversation_id` to NotebookLM query for conversation continuity
+4. **Save**: After query, save the new/returned `conversation_id` back to `SessionStore`
+
+```
+┌─────────────────┐     ┌───────────────────┐     ┌─────────────────┐
+│  Open Web UI    │────>│   Smart Router    │────>│   NotebookLM    │
+│  (chat_id)      │     │   (SessionStore)  │     │ (conversation_id)│
+└─────────────────┘     └───────────────────┘     └─────────────────┘
+                              │
+                              ▼
+                        ┌───────────────────┐
+                        │  chat_id ──────>  │
+                        │  conversation_id  │
+                        │  (TTL: 24 hours)  │
+                        └───────────────────┘
+```
+
+**Behavior:**
+- First message in a chat: Creates new NotebookLM conversation, stores mapping
+- Subsequent messages: Reuses existing conversation for context continuity
+- Different chats: Each gets its own NotebookLM conversation
+- Session expiry: Configurable TTL (default 24 hours)
 
 ## Configuration
 
@@ -369,6 +403,24 @@ curl -N http://localhost:8080/v1/chat/completions \
     "messages": [{"role": "user", "content": "What information is in my notebooks?"}],
     "stream": true
   }'
+```
+
+Or for powershell
+```bash
+$body = @'
+{
+  "model": "smart-router",
+  "messages": [
+    { "role": "user", "content": "What information is in my notebooks?" }
+  ],
+  "stream": true
+}
+'@
+
+curl -N http://localhost:9999/v1/chat/completions `
+  -H "Authorization: Bearer $env:NLM_PROXY_OPENAI_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d $body
 ```
 
 **Expected:**

@@ -129,10 +129,11 @@ async def list_models():
         await client.close()
 
 
-async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest):
+async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest, chat_id: str = None):
     """Stream response with routing reasoning as reasoning_content."""
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
+    conversation_id = None
 
     # First, stream the routing decision as reasoning_content
     reasoning_chunk = ChatCompletionChunk(
@@ -164,10 +165,20 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
 
         async for chunk in client.query_stream(
             notebook_id=decision.notebook_id,
-            query_text=query
+            query_text=query,
+            conversation_id=request.conversation_id
         ):
             chunk_type = chunk.get("type")
             full_text = chunk.get("text", "")
+
+            # Extract conversation_id from first chunk
+            new_conv_id = chunk.get("conversation_id")
+            if new_conv_id and not conversation_id:
+                conversation_id = new_conv_id
+                # Save to session store if we have a chat_id
+                if chat_id and app.state.session_store:
+                    app.state.session_store.set(chat_id, conversation_id)
+                    logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conversation_id}")
 
             if chunk_type == "thinking" and not request.include_thinking:
                 previous_thinking = full_text
@@ -223,6 +234,22 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
         cache_ttl=routing_settings.summary_cache_ttl
     )
 
+    # Extract chat_id from headers or request metadata (same as regular endpoint)
+    chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
+    if not chat_id and hasattr(request, 'metadata') and request.metadata:
+        chat_id = request.metadata.get("chat_id")
+
+    logger.debug(f"[SMART-ROUTER] Extracted chat_id: {chat_id}")
+
+    # Load existing conversation_id from session store if chat_id exists
+    if chat_id and app.state.session_store:
+        stored_conv_id = app.state.session_store.get(chat_id)
+        if stored_conv_id:
+            logger.info(f"[SMART-ROUTER] Reusing conversation: chat_id={chat_id}, conversation_id={stored_conv_id}")
+            request.conversation_id = stored_conv_id
+        else:
+            logger.info(f"[SMART-ROUTER] New conversation for chat_id={chat_id}")
+
     try:
         user_messages = [m for m in request.messages if m.role == "user"]
         if not user_messages:
@@ -235,7 +262,7 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
         if request.stream:
             return StreamingResponse(
-                stream_smart_response(client, router, decision, query, request),
+                stream_smart_response(client, router, decision, query, request, chat_id),
                 media_type="text/event-stream"
             )
 
@@ -247,12 +274,19 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 max_tokens=4096
             )
         else:
-            # Call NotebookLM
+            # Call NotebookLM with conversation_id for continuity
             result = await client.query(
                 notebook_id=decision.notebook_id,
-                query_text=query
+                query_text=query,
+                conversation_id=request.conversation_id
             )
             response_text = result.get("answer", "") if result else ""
+
+            # Save conversation_id to session store if we have a chat_id
+            conv_id = result.get("conversation_id", "") if result else ""
+            if chat_id and conv_id and app.state.session_store:
+                app.state.session_store.set(chat_id, conv_id)
+                logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conv_id}")
 
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
