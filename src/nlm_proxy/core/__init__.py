@@ -23,6 +23,7 @@ from .auth import (
     REQUIRED_COOKIES,
 )
 from .client import NotebookLMClient, Notebook, ConversationTurn, SOURCE_ADD_TIMEOUT
+from .llm_client import ExternalLLMClient
 
 __all__ = [
     # Config
@@ -55,4 +56,6 @@ __all__ = [
     "Notebook",
     "ConversationTurn",
     "SOURCE_ADD_TIMEOUT",
+    # External LLM Client
+    "ExternalLLMClient",
 ]

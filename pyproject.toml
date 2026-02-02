@@ -38,6 +38,7 @@ mcp = [
 openai = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
+    "openai>=1.0.0",
 ]
 all = [
     "nlm-proxy[mcp,openai]",
