@@ -1,6 +1,7 @@
 """Smart request router using LLM classification."""
 
 import json
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -14,6 +15,9 @@ if TYPE_CHECKING:
     from nlm_proxy.core import NotebookLMClient
 
 logger = get_logger(__name__)
+
+# Default max source titles to include in selection prompt
+DEFAULT_MAX_SOURCE_TITLES = 15
 
 
 class RequestType(Enum):
@@ -92,13 +96,21 @@ class SmartRouter:
             logger.warning("[ROUTER] No notebooks available for selection")
             return None, "No notebooks available"
 
-        # Build notebook info for LLM
+        # Get max source titles from env or use default
+        max_source_titles = int(
+            os.environ.get("NLM_PROXY_ROUTING_MAX_SOURCE_TITLES", DEFAULT_MAX_SOURCE_TITLES)
+        )
+
+        # Build notebook info for LLM with source-level information
         notebooks_info = [
             {
                 "id": nb.id,
                 "title": nb.title,
                 "summary": nb.summary[:500] if nb.summary else "",
-                "topics": nb.topics[:5] if nb.topics else []
+                "topics": nb.topics[:5] if nb.topics else [],
+                "source_count": nb.source_count,
+                "source_types": nb.source_types,
+                "source_titles": nb.source_titles[:max_source_titles]
             }
             for nb in notebooks
         ]

@@ -14,6 +14,7 @@ Unified configuration using pydantic-settings with precedence:
 | `OpenAISettings` | `NLM_PROXY_OPENAI_` | OpenAI proxy settings |
 | `AuthSettings` | `NLM_PROXY_AUTH_` | Authentication settings |
 | `LoggingSettings` | `NLM_PROXY_LOG_` | Logging settings |
+| `SmartRoutingSettings` | `NLM_PROXY_ROUTING_` | Smart routing and source fetching |
 
 ## Environment Variables
 
@@ -38,6 +39,16 @@ NLM_PROXY_AUTH_AUTO_LAUNCH=true
 # Logging
 NLM_PROXY_LOG_LEVEL=INFO
 NLM_PROXY_LOG_FILE=~/.nlm-proxy/logs/nlm-proxy.log
+
+# Smart Routing
+NLM_PROXY_ROUTING_LLM_BASE_URL=https://api.openai.com/v1
+NLM_PROXY_ROUTING_LLM_API_KEY=your-api-key
+NLM_PROXY_ROUTING_LLM_MODEL=gpt-4o-mini
+NLM_PROXY_ROUTING_ROUTER_MODEL_NAME=knowledge-finder
+NLM_PROXY_ROUTING_ALLOWED_NOTEBOOKS=  # comma-separated notebook IDs
+NLM_PROXY_ROUTING_SUMMARY_CACHE_TTL=3600
+NLM_PROXY_ROUTING_SOURCE_FETCH_CONCURRENCY=10  # max parallel source fetches
+NLM_PROXY_ROUTING_MAX_SOURCE_TITLES=15  # max source titles in selection prompt
 ```
 
 ## .env File Locations

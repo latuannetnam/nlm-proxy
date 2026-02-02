@@ -41,14 +41,17 @@ Automatically route requests to the best backend using AI-powered classification
 |---------|-------------|
 | **Auto-Classification** | LLM classifies queries as knowledge lookups or general tasks |
 | **Notebook Selection** | Automatically selects the most relevant notebook for knowledge queries |
+| **Source-Level Routing** | Routes based on specific document names, URLs, and source types |
 | **LLM Passthrough** | General tasks routed to external LLM (e.g., GPT-4o-mini) |
-| **Cached Summaries** | Notebook summaries cached with configurable TTL |
+| **Cached Summaries** | Notebook and source info cached with configurable TTL |
 
 **Configuration:**
 ```bash
 # Add to ~/.nlm-proxy/.env
 NLM_PROXY_ROUTING_LLM_API_KEY=sk-your-openai-key
 NLM_PROXY_ROUTING_LLM_MODEL=gpt-4o-mini
+NLM_PROXY_ROUTING_SOURCE_FETCH_CONCURRENCY=10  # parallel source fetches
+NLM_PROXY_ROUTING_MAX_SOURCE_TITLES=15         # titles in selection prompt
 ```
 
 **Usage:**
@@ -60,9 +63,10 @@ client = OpenAI(base_url="http://localhost:8080/v1", api_key="your-key")
 # Use "knowledge-finder" model for automatic routing
 response = client.chat.completions.create(
     model="knowledge-finder",
-    messages=[{"role": "user", "content": "What does the research say about X?"}],
+    messages=[{"role": "user", "content": "What does the Attention Is All You Need paper say?"}],
     stream=True
 )
+# Routes to notebook containing "Attention Is All You Need.pdf" source
 ```
 
 See [Smart Routing Architecture](docs/smart-routing-architecture.md) for details.

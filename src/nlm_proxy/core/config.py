@@ -142,6 +142,14 @@ class SmartRoutingSettings(BaseSettings):
         default=3600,
         description="TTL for notebook summary cache in seconds"
     )
+    source_fetch_concurrency: int = Field(
+        default=10,
+        description="Max concurrent source summary fetches"
+    )
+    max_source_titles: int = Field(
+        default=15,
+        description="Max source titles to include in selection prompt"
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="NLM_PROXY_ROUTING_",
