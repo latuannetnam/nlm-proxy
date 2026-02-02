@@ -13,6 +13,7 @@ from nlm_proxy.core import NotebookLMClient
 from nlm_proxy.core.auth import load_cached_tokens
 from nlm_proxy.core.config import get_openai_settings, get_routing_settings
 from nlm_proxy.core.logging import get_logger
+from nlm_proxy.openai.router import SmartRouter, RequestType
 from nlm_proxy.openai.session import SessionStore
 from nlm_proxy.openai.types import (
     ChatCompletionRequest,
@@ -128,6 +129,155 @@ async def list_models():
         await client.close()
 
 
+async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest):
+    """Stream response with routing reasoning as reasoning_content."""
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    created = int(time.time())
+
+    # First, stream the routing decision as reasoning_content
+    reasoning_chunk = ChatCompletionChunk(
+        id=chunk_id,
+        created=created,
+        model=request.model,
+        choices=[Choice(delta=DeltaContent(reasoning_content=decision.reasoning + "\n\n"))]
+    )
+    yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
+
+    if decision.request_type == RequestType.LLM_TASK:
+        # Stream from external LLM
+        messages = [{"role": m.role, "content": m.content} for m in request.messages]
+        stream = await router.llm_client.stream(messages)
+        async for chunk in stream:
+            delta_content = chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
+            if delta_content:
+                openai_chunk = ChatCompletionChunk(
+                    id=chunk_id,
+                    created=created,
+                    model=request.model,
+                    choices=[Choice(delta=DeltaContent(content=delta_content))]
+                )
+                yield f"data: {openai_chunk.model_dump_json()}\n\n"
+    else:
+        # Stream from NotebookLM - reuse existing logic
+        previous_thinking = ""
+        previous_answer = ""
+
+        async for chunk in client.query_stream(
+            notebook_id=decision.notebook_id,
+            query_text=query
+        ):
+            chunk_type = chunk.get("type")
+            full_text = chunk.get("text", "")
+
+            if chunk_type == "thinking" and not request.include_thinking:
+                previous_thinking = full_text
+                continue
+
+            if chunk_type == "thinking":
+                delta_text = full_text[len(previous_thinking):]
+                previous_thinking = full_text
+                if delta_text:
+                    delta = DeltaContent(reasoning_content=delta_text)
+                    openai_chunk = ChatCompletionChunk(
+                        id=chunk_id,
+                        created=created,
+                        model=request.model,
+                        choices=[Choice(delta=delta)]
+                    )
+                    yield f"data: {openai_chunk.model_dump_json()}\n\n"
+            else:
+                delta_text = full_text[len(previous_answer):]
+                previous_answer = full_text
+                if delta_text:
+                    delta = DeltaContent(content=delta_text)
+                    openai_chunk = ChatCompletionChunk(
+                        id=chunk_id,
+                        created=created,
+                        model=request.model,
+                        choices=[Choice(delta=delta)]
+                    )
+                    yield f"data: {openai_chunk.model_dump_json()}\n\n"
+
+    # Final chunk
+    final_chunk = ChatCompletionChunk(
+        id=chunk_id,
+        created=created,
+        model=request.model,
+        choices=[Choice(delta=DeltaContent(), finish_reason="stop")]
+    )
+    yield f"data: {final_chunk.model_dump_json()}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+async def handle_smart_routing(request: ChatCompletionRequest, http_request: Request):
+    """Handle requests to the smart router model."""
+    routing_settings = get_routing_settings()
+    client = await get_client()
+
+    router = SmartRouter(
+        nlm_client=client,
+        llm_base_url=routing_settings.llm_base_url,
+        llm_api_key=routing_settings.llm_api_key,
+        llm_model=routing_settings.llm_model,
+        allowed_notebooks=routing_settings.allowed_notebooks,
+        cache_ttl=routing_settings.summary_cache_ttl
+    )
+
+    try:
+        user_messages = [m for m in request.messages if m.role == "user"]
+        if not user_messages:
+            raise HTTPException(status_code=400, detail="No user message found")
+
+        query = user_messages[-1].content
+        decision = await router.route(query)
+
+        logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
+
+        if request.stream:
+            return StreamingResponse(
+                stream_smart_response(client, router, decision, query, request),
+                media_type="text/event-stream"
+            )
+
+        # Non-streaming path
+        if decision.request_type == RequestType.LLM_TASK:
+            # Call external LLM
+            response_text = await router.llm_client.complete(
+                query,
+                max_tokens=4096
+            )
+        else:
+            # Call NotebookLM
+            result = await client.query(
+                notebook_id=decision.notebook_id,
+                query_text=query
+            )
+            response_text = result.get("answer", "") if result else ""
+
+        return ChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+            created=int(time.time()),
+            model=request.model,
+            choices=[ResponseChoice(
+                index=0,
+                message=ResponseMessage(
+                    role="assistant",
+                    content=response_text,
+                    reasoning_content=decision.reasoning
+                ),
+                finish_reason="stop"
+            )],
+            usage=Usage(
+                prompt_tokens=len(query),
+                completion_tokens=len(response_text),
+                total_tokens=len(query) + len(response_text)
+            )
+        )
+    finally:
+        await router.close()
+        await client.close()
+
+
 async def stream_response(client, notebook_id: str, query_text: str, request: ChatCompletionRequest, chat_id: str = None):
     """Generate OpenAI-compatible SSE stream from NotebookLM query_stream."""
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -215,6 +365,11 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     """OpenAI-compatible chat completions endpoint."""
     logger.debug(f"[PROXY] Received request: POST /v1/chat/completions")
     logger.debug(f"[PROXY] Request params: model={request.model}, stream={request.stream}, messages={len(request.messages)}, conversation_id={request.conversation_id}, include_thinking={request.include_thinking}")
+
+    # Check if using smart router
+    routing_settings = get_routing_settings()
+    if request.model == routing_settings.router_model_name:
+        return await handle_smart_routing(request, http_request)
 
     # Log all headers for debugging
     logger.debug(f"[DEBUG] HTTP Headers: {dict(http_request.headers)}")
