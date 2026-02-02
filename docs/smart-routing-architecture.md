@@ -310,6 +310,113 @@ If fetching a notebook summary fails:
 - Notebook list and summary fetches are sequential (API limitation)
 - Consider pre-warming cache on server startup for large notebook collections
 
+## Manual Verification
+
+### Step 1: Configure Routing
+
+Add to `~/.nlm-proxy/.env`:
+
+```bash
+# Smart Routing Configuration
+NLM_PROXY_ROUTING_LLM_BASE_URL=https://api.openai.com/v1
+NLM_PROXY_ROUTING_LLM_API_KEY=sk-your-openai-key
+NLM_PROXY_ROUTING_LLM_MODEL=gpt-4o-mini
+```
+
+Alternative providers:
+
+```bash
+# OpenRouter
+NLM_PROXY_ROUTING_LLM_BASE_URL=https://openrouter.ai/api/v1
+NLM_PROXY_ROUTING_LLM_API_KEY=sk-or-xxx
+NLM_PROXY_ROUTING_LLM_MODEL=anthropic/claude-3-haiku
+
+# Ollama (local)
+NLM_PROXY_ROUTING_LLM_BASE_URL=http://localhost:11434/v1
+NLM_PROXY_ROUTING_LLM_API_KEY=ollama
+NLM_PROXY_ROUTING_LLM_MODEL=llama3.2
+```
+
+### Step 2: Start the Server
+
+```bash
+nlm-proxy serve openai --port 8080
+```
+
+With debug logging:
+
+```bash
+NLM_PROXY_DEBUG=true nlm-proxy serve openai --port 8080
+```
+
+### Step 3: Verify smart-router in Models List
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Authorization: Bearer $NLM_PROXY_OPENAI_API_KEY" | jq '.data[].id'
+```
+
+**Expected:** `"smart-router"` appears first, followed by notebook IDs.
+
+### Step 4: Test NotebookLM Query Routing
+
+```bash
+curl -N http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $NLM_PROXY_OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "smart-router",
+    "messages": [{"role": "user", "content": "What information is in my notebooks?"}],
+    "stream": true
+  }'
+```
+
+**Expected:**
+- First chunk has `reasoning_content` with "Selected notebook: ..."
+- Subsequent chunks have `content` with NotebookLM answer
+
+### Step 5: Test LLM Task Routing
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $NLM_PROXY_OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "smart-router",
+    "messages": [{"role": "user", "content": "Summarize what we discussed"}],
+    "stream": false
+  }'
+```
+
+**Expected:**
+- `reasoning_content`: "Classified as LLM task (not a notebook query)"
+- `content`: Response from external LLM
+
+### Step 6: Test with Python SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="your-api-key"  # NLM_PROXY_OPENAI_API_KEY
+)
+
+# Streaming with smart routing
+response = client.chat.completions.create(
+    model="smart-router",
+    messages=[{"role": "user", "content": "What's in my research notes?"}],
+    stream=True
+)
+
+for chunk in response:
+    delta = chunk.choices[0].delta
+    if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+        print(f"[Routing] {delta.reasoning_content}", end="")
+    if delta.content:
+        print(delta.content, end="")
+```
+
 ## File Structure
 
 ```
