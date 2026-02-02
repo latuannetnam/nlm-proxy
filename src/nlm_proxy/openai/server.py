@@ -106,7 +106,7 @@ async def list_models():
             "object": "model",
             "created": 0,
             "owned_by": "nlm-proxy",
-            "name": "Smart Router",
+            "name": "Knowledge Finder",
             "description": "AI-powered routing to best notebook or external LLM",
         }
 

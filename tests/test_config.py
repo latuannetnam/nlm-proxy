@@ -274,7 +274,7 @@ class TestSmartRoutingSettings:
         assert settings.llm_base_url == "https://api.openai.com/v1"
         assert settings.llm_api_key == "test-key"
         assert settings.llm_model == "gpt-4o-mini"
-        assert settings.router_model_name == "smart-router"
+        assert settings.router_model_name == "knowledge-finder"
         assert settings.allowed_notebooks == []
         assert settings.summary_cache_ttl == 3600
 

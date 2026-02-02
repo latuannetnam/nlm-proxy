@@ -4,7 +4,7 @@ Smart routing automatically classifies incoming requests and routes them to eith
 
 ## Overview
 
-When a client uses `model="smart-router"`, the proxy:
+When a client uses `model="knowledge-finder"`, the proxy:
 1. Classifies the request using an external LLM
 2. For knowledge queries: selects the best notebook and queries NotebookLM
 3. For general tasks: passes through to the external LLM
@@ -31,7 +31,7 @@ All use prefix `NLM_PROXY_ROUTING_`:
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | External LLM endpoint |
 | `LLM_API_KEY` | (required) | API key for external LLM |
 | `LLM_MODEL` | `gpt-4o-mini` | Model for classification |
-| `ROUTER_MODEL_NAME` | `smart-router` | Model name triggering routing |
+| `ROUTER_MODEL_NAME` | `knowledge-finder` | Model name triggering routing |
 | `ALLOWED_NOTEBOOKS` | (empty = all) | Comma-separated notebook IDs |
 | `SUMMARY_CACHE_TTL` | `3600` | Cache TTL in seconds |
 

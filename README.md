@@ -57,9 +57,9 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://localhost:8080/v1", api_key="your-key")
 
-# Use "smart-router" model for automatic routing
+# Use "knowledge-finder" model for automatic routing
 response = client.chat.completions.create(
-    model="smart-router",
+    model="knowledge-finder",
     messages=[{"role": "user", "content": "What does the research say about X?"}],
     stream=True
 )

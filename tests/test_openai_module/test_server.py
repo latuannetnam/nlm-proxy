@@ -12,7 +12,7 @@ def mock_settings():
         mock_openai.return_value = MagicMock(api_key="test-api-key")
         with patch("nlm_proxy.openai.server.get_routing_settings") as mock_routing:
             mock_routing.return_value = MagicMock(
-                router_model_name="smart-router",
+                router_model_name="knowledge-finder",
                 llm_base_url="https://api.test.com/v1",
                 llm_api_key="test-key",
                 llm_model="gpt-4o-mini"
@@ -21,7 +21,7 @@ def mock_settings():
 
 
 def test_list_models_includes_smart_router(mock_settings):
-    """Test that /v1/models includes the smart router model."""
+    """Test that /v1/models includes the knowledge finder model."""
     from nlm_proxy.openai.server import app
 
     with patch("nlm_proxy.openai.server.get_client") as mock_get_client:
@@ -42,7 +42,7 @@ def test_list_models_includes_smart_router(mock_settings):
         data = response.json()
         model_ids = [m["id"] for m in data["data"]]
 
-        assert "smart-router" in model_ids
+        assert "knowledge-finder" in model_ids
         assert "nb-123" in model_ids
 
 
@@ -82,7 +82,7 @@ def test_chat_completions_smart_routing_notebooklm(mock_settings):
                 "/v1/chat/completions",
                 headers={"Authorization": "Bearer test-api-key"},
                 json={
-                    "model": "smart-router",
+                    "model": "knowledge-finder",
                     "messages": [{"role": "user", "content": "What does my research say?"}],
                     "stream": False
                 }

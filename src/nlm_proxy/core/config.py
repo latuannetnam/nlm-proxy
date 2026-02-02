@@ -131,7 +131,7 @@ class SmartRoutingSettings(BaseSettings):
         description="Model to use for classification and routing"
     )
     router_model_name: str = Field(
-        default="smart-router",
+        default="knowledge-finder",
         description="Model name that triggers smart routing"
     )
     allowed_notebooks: list[str] = Field(

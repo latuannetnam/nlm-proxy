@@ -13,7 +13,7 @@ Smart routing uses an external LLM (e.g., GPT-4o-mini) to analyze each request a
 │                         OpenAI Proxy Server                             │
 │                                                                         │
 │  ┌─────────────┐    ┌──────────────────────────────────────────────┐   │
-│  │   Request   │───>│  Model = "smart-router"?                     │   │
+│  │   Request   │───>│  Model = "knowledge-finder"?                 │   │
 │  │  /v1/chat   │    │                                              │   │
 │  │ completions │    │  YES ──────────────────────────────────────┐ │   │
 │  └─────────────┘    │                                            │ │   │
@@ -198,14 +198,14 @@ Respond with ONLY the notebook_id (UUID) of the most relevant notebook.
 
 **Key Functions:**
 
-- `handle_smart_routing()` - Entry point when model="smart-router"
+- `handle_smart_routing()` - Entry point when model="knowledge-finder"
 - `stream_smart_response()` - Streaming with reasoning_content for routing decision
 
 **Request Flow:**
 ```
 POST /v1/chat/completions
   │
-  ├─ model == "smart-router"
+  ├─ model == "knowledge-finder"
   │     └─> handle_smart_routing()
   │           ├─> Extract chat_id from headers/metadata
   │           ├─> Lookup conversation_id from SessionStore
@@ -258,7 +258,7 @@ All settings use the `NLM_PROXY_ROUTING_` prefix.
 | `NLM_PROXY_ROUTING_LLM_BASE_URL` | `https://api.openai.com/v1` | Base URL for external LLM |
 | `NLM_PROXY_ROUTING_LLM_API_KEY` | (required) | API key for external LLM |
 | `NLM_PROXY_ROUTING_LLM_MODEL` | `gpt-4o-mini` | Model for classification |
-| `NLM_PROXY_ROUTING_ROUTER_MODEL_NAME` | `smart-router` | Model name that triggers routing |
+| `NLM_PROXY_ROUTING_ROUTER_MODEL_NAME` | `knowledge-finder` | Model name that triggers routing |
 | `NLM_PROXY_ROUTING_ALLOWED_NOTEBOOKS` | (empty = all) | Comma-separated notebook IDs |
 | `NLM_PROXY_ROUTING_SUMMARY_CACHE_TTL` | `3600` | Cache TTL in seconds |
 
@@ -267,7 +267,7 @@ All settings use the `NLM_PROXY_ROUTING_` prefix.
 NLM_PROXY_ROUTING_LLM_BASE_URL=https://api.openai.com/v1
 NLM_PROXY_ROUTING_LLM_API_KEY=sk-your-api-key
 NLM_PROXY_ROUTING_LLM_MODEL=gpt-4o-mini
-NLM_PROXY_ROUTING_ROUTER_MODEL_NAME=smart-router
+NLM_PROXY_ROUTING_ROUTER_MODEL_NAME=knowledge-finder
 NLM_PROXY_ROUTING_SUMMARY_CACHE_TTL=3600
 ```
 
@@ -307,9 +307,9 @@ client = OpenAI(
     api_key="your-nlm-proxy-api-key"
 )
 
-# Use "smart-router" as the model
+# Use "knowledge-finder" as the model
 response = client.chat.completions.create(
-    model="smart-router",
+    model="knowledge-finder",
     messages=[{"role": "user", "content": "What does the research say about X?"}],
     stream=True
 )
@@ -333,7 +333,7 @@ The smart router returns routing decisions in `reasoning_content`:
 ```json
 {
   "id": "chatcmpl-abc123",
-  "model": "smart-router",
+  "model": "knowledge-finder",
   "choices": [{
     "delta": {
       "reasoning_content": "Selected notebook: Research Notes (ID: abc-123)\n\n",
@@ -430,14 +430,14 @@ With debug logging:
 NLM_PROXY_DEBUG=true nlm-proxy serve openai --port 8080
 ```
 
-### Step 3: Verify smart-router in Models List
+### Step 3: Verify knowledge-finder in Models List
 
 ```bash
 curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer $NLM_PROXY_OPENAI_API_KEY" | jq '.data[].id'
 ```
 
-**Expected:** `"smart-router"` appears first, followed by notebook IDs.
+**Expected:** `"knowledge-finder"` appears first, followed by notebook IDs.
 
 ### Step 4: Test NotebookLM Query Routing
 
@@ -446,7 +446,7 @@ curl -N http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer $NLM_PROXY_OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "smart-router",
+    "model": "knowledge-finder",
     "messages": [{"role": "user", "content": "What information is in my notebooks?"}],
     "stream": true
   }'
@@ -456,7 +456,7 @@ Or for powershell
 ```bash
 $body = @'
 {
-  "model": "smart-router",
+  "model": "knowledge-finder",
   "messages": [
     { "role": "user", "content": "What information is in my notebooks?" }
   ],
@@ -481,7 +481,7 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer $NLM_PROXY_OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "smart-router",
+    "model": "knowledge-finder",
     "messages": [{"role": "user", "content": "Summarize what we discussed"}],
     "stream": false
   }'
@@ -503,7 +503,7 @@ client = OpenAI(
 
 # Streaming with smart routing
 response = client.chat.completions.create(
-    model="smart-router",
+    model="knowledge-finder",
     messages=[{"role": "user", "content": "What's in my research notes?"}],
     stream=True
 )
