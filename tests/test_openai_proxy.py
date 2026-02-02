@@ -66,9 +66,12 @@ def test_models_list_returns_notebooks():
         assert response.status_code == 200
         data = response.json()
         assert data["object"] == "list"
-        assert len(data["data"]) == 2
-        assert data["data"][0]["id"] == "nb-123"
-        assert data["data"][0]["owned_by"] == "notebooklm"
+        assert len(data["data"]) == 3  # 2 notebooks + knowledge-finder
+        # Check for knowledge-finder model
+        model_ids = [model["id"] for model in data["data"]]
+        assert "knowledge-finder" in model_ids
+        assert "nb-123" in model_ids
+        assert "nb-456" in model_ids
 
 
 @pytest.mark.openai

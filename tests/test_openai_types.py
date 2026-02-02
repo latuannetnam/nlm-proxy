@@ -29,7 +29,7 @@ def test_chat_completion_request_minimal():
     assert req.model == "notebook-uuid"
     assert req.stream is False  # Default
     assert req.conversation_id is None
-    assert req.include_thinking is False
+    assert req.include_thinking is True  # Default changed to True
 
 
 @pytest.mark.openai

@@ -8,8 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 async def test_router_classify_notebooklm():
     """Test classification of NotebookLM queries."""
     from nlm_proxy.openai.router import SmartRouter, RequestType
+    from nlm_proxy.openai.notebook_cache import NotebookCache
 
     mock_nlm_client = MagicMock()
+    mock_nlm_client.list_notebooks = AsyncMock(return_value=[])
+
+    # Create mock cache
+    mock_cache = NotebookCache(nlm_client=mock_nlm_client, ttl_seconds=3600)
 
     with patch("nlm_proxy.openai.router.ExternalLLMClient") as mock_llm_class:
         mock_llm = AsyncMock()
@@ -18,6 +23,7 @@ async def test_router_classify_notebooklm():
 
         router = SmartRouter(
             nlm_client=mock_nlm_client,
+            notebook_cache=mock_cache,
             llm_base_url="https://api.test.com/v1",
             llm_api_key="test-key",
             llm_model="gpt-4o-mini"
@@ -32,8 +38,13 @@ async def test_router_classify_notebooklm():
 async def test_router_classify_llm_task():
     """Test classification of LLM tasks."""
     from nlm_proxy.openai.router import SmartRouter, RequestType
+    from nlm_proxy.openai.notebook_cache import NotebookCache
 
     mock_nlm_client = MagicMock()
+    mock_nlm_client.list_notebooks = AsyncMock(return_value=[])
+
+    # Create mock cache
+    mock_cache = NotebookCache(nlm_client=mock_nlm_client, ttl_seconds=3600)
 
     with patch("nlm_proxy.openai.router.ExternalLLMClient") as mock_llm_class:
         mock_llm = AsyncMock()
@@ -42,6 +53,7 @@ async def test_router_classify_llm_task():
 
         router = SmartRouter(
             nlm_client=mock_nlm_client,
+            notebook_cache=mock_cache,
             llm_base_url="https://api.test.com/v1",
             llm_api_key="test-key",
             llm_model="gpt-4o-mini"
@@ -56,6 +68,7 @@ async def test_router_classify_llm_task():
 async def test_router_route_decision():
     """Test full routing decision."""
     from nlm_proxy.openai.router import SmartRouter, RequestType
+    from nlm_proxy.openai.notebook_cache import NotebookCache
 
     mock_nlm_client = AsyncMock()
     mock_nlm_client.list_notebooks = AsyncMock(return_value=[
@@ -66,6 +79,10 @@ async def test_router_route_decision():
         "suggested_topics": ["AI", "ML"]
     })
 
+    # Create cache with mock data
+    mock_cache = NotebookCache(nlm_client=mock_nlm_client, ttl_seconds=3600)
+    mock_cache.set("nb-123", "Research Notes", "AI research notes", ["AI", "ML"])
+
     with patch("nlm_proxy.openai.router.ExternalLLMClient") as mock_llm_class:
         mock_llm = AsyncMock()
         # First call: classify as notebooklm
@@ -75,6 +92,7 @@ async def test_router_route_decision():
 
         router = SmartRouter(
             nlm_client=mock_nlm_client,
+            notebook_cache=mock_cache,
             llm_base_url="https://api.test.com/v1",
             llm_api_key="test-key",
             llm_model="gpt-4o-mini"
