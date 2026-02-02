@@ -151,6 +151,13 @@ class SmartRoutingSettings(BaseSettings):
         description="Max source titles to include in selection prompt"
     )
 
+    # Cross-notebook query settings
+    cross_notebook_enabled: bool = True
+    cross_notebook_max_secondary: int = 2
+    cross_notebook_concurrency: int = 5
+    cross_notebook_synthesis_enabled: bool = True
+    cross_notebook_section_marker: str = "\n\n---\n\n📚 **Cross-referenced from other sources:**\n\n"
+
     model_config = SettingsConfigDict(
         env_prefix="NLM_PROXY_ROUTING_",
         env_file=_get_env_files(),
