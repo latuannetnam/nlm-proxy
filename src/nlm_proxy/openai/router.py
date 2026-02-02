@@ -2,7 +2,7 @@
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -24,6 +24,34 @@ class RequestType(Enum):
     """Type of request after classification."""
     NOTEBOOKLM = "notebooklm"
     LLM_TASK = "llm_task"
+
+
+class NotebookRole(str, Enum):
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+
+
+@dataclass
+class NotebookSelection:
+    notebook_id: str
+    role: NotebookRole
+    reasoning: str
+    title: str = ""
+
+
+@dataclass
+class MultiRoutingDecision:
+    request_type: RequestType
+    notebooks: list[NotebookSelection] = field(default_factory=list)
+    reasoning: str = ""
+
+    @property
+    def primary_notebook(self) -> NotebookSelection | None:
+        return next((n for n in self.notebooks if n.role == NotebookRole.PRIMARY), None)
+
+    @property
+    def secondary_notebooks(self) -> list[NotebookSelection]:
+        return [n for n in self.notebooks if n.role == NotebookRole.SECONDARY]
 
 
 @dataclass
