@@ -83,11 +83,19 @@ def test_chat_completions_non_streaming():
         "conversation_id": "conv-789",
         "turn_number": 1,
         "is_follow_up": False,
+        "source_ids": ["uuid-1"],  # Include source_ids for citation support
+    }
+
+    mock_notebook_data = {
+        "sources": [
+            {"id": "uuid-1", "title": "Test Source", "type": "pdf"},
+        ]
     }
 
     with patch("nlm_proxy.openai.server.get_client") as mock_get_client:
         mock_client = MagicMock()
         mock_client.query = AsyncMock(return_value=mock_query_result)
+        mock_client.get_notebook = AsyncMock(return_value=mock_notebook_data)
         mock_client.close = AsyncMock()
         mock_get_client.return_value = mock_client
 
@@ -107,6 +115,10 @@ def test_chat_completions_non_streaming():
         assert data["object"] == "chat.completion"
         assert data["choices"][0]["message"]["content"] == "Based on your sources, the answer is 42."
         assert data["system_fingerprint"] == "conv_conv-789"
+        # Verify sources are included in response
+        assert "sources" in data
+        assert len(data["sources"]) == 1
+        assert data["sources"][0]["source"]["name"] == "Test Source"
 
 
 @pytest.mark.openai
@@ -114,13 +126,20 @@ def test_chat_completions_streaming():
     from nlm_proxy.openai.server import app
 
     async def mock_stream():
-        yield {"type": "thinking", "text": "Reading sources...", "conversation_id": "conv-123"}
-        yield {"type": "answer", "text": "The answer is ", "conversation_id": "conv-123"}
-        yield {"type": "answer", "text": "42.", "conversation_id": "conv-123"}
+        yield {"type": "thinking", "text": "Reading sources...", "conversation_id": "conv-123", "source_ids": []}
+        yield {"type": "answer", "text": "The answer is ", "conversation_id": "conv-123", "source_ids": ["uuid-1"]}
+        yield {"type": "answer", "text": "42.", "conversation_id": "conv-123", "source_ids": ["uuid-1"]}
+
+    mock_notebook_data = {
+        "sources": [
+            {"id": "uuid-1", "title": "Test Source", "type": "pdf"},
+        ]
+    }
 
     with patch("nlm_proxy.openai.server.get_client") as mock_get_client:
         mock_client = MagicMock()
         mock_client.query_stream = MagicMock(return_value=mock_stream())
+        mock_client.get_notebook = AsyncMock(return_value=mock_notebook_data)
         mock_client.close = AsyncMock()
         mock_get_client.return_value = mock_client
 
@@ -143,6 +162,8 @@ def test_chat_completions_streaming():
         # Should have answer chunks (thinking filtered by default)
         assert len(chunks) >= 2  # At least 2 answer chunks + [DONE]
         assert "data: [DONE]" in response.text
+        # Verify citation events are present
+        assert '"type": "source"' in response.text
 
 
 @pytest.mark.openai
