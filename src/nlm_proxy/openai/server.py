@@ -29,6 +29,31 @@ from nlm_proxy.openai.types import (
 
 logger = get_logger(__name__)
 
+
+def _extract_source_metadata(notebook_data: dict) -> dict[str, dict]:
+    """Extract source ID -> metadata mapping from notebook data.
+
+    Args:
+        notebook_data: The notebook data from get_notebook() API call
+
+    Returns:
+        Dict mapping source_id to {"title": str, "type": str, "url": str|None}
+    """
+    sources = {}
+    source_list = notebook_data.get("sources", [])
+
+    for source in source_list:
+        source_id = source.get("id")
+        if source_id:
+            sources[source_id] = {
+                "title": source.get("title", "Unknown Source"),
+                "type": source.get("type"),
+                "url": source.get("url"),
+            }
+
+    return sources
+
+
 app = FastAPI(
     title="NotebookLM OpenAI Proxy",
     description="OpenAI-compatible API for NotebookLM",
