@@ -1678,13 +1678,14 @@ class NotebookLMClient:
             await self._cache_conversation_turn(conversation_id, query_text, combined_answer)
 
     def _parse_stream_chunk(self, json_str: str) -> dict | None:
-        """Parse a single streaming chunk and extract text and type.
+        """Parse a single streaming chunk and extract text, type, and source IDs.
 
         Args:
             json_str: A single JSON line from the streaming response
 
         Returns:
-            Dict with type ("thinking" or "answer"), text, and raw_type, or None if parsing fails
+            Dict with type ("thinking" or "answer"), text, raw_type, and source_ids,
+            or None if parsing fails
         """
         try:
             parsed = json.loads(json_str)
@@ -1714,6 +1715,14 @@ class NotebookLMClient:
                 if isinstance(first_elem, list) and len(first_elem) > 0:
                     text = first_elem[0]
                     if isinstance(text, str) and len(text) > 10:
+                        # Extract source IDs from position 2
+                        source_ids = []
+                        if len(first_elem) > 2 and isinstance(first_elem[2], list):
+                            for source_item in first_elem[2]:
+                                # Only include UUID strings, skip integer timestamps
+                                if isinstance(source_item, str):
+                                    source_ids.append(source_item)
+
                         # Extract type indicator
                         raw_type = 2  # Default to thinking
                         if len(first_elem) > 4 and isinstance(first_elem[4], list):
@@ -1725,6 +1734,7 @@ class NotebookLMClient:
                             "type": "answer" if raw_type == 1 else "thinking",
                             "text": text,
                             "raw_type": raw_type,
+                            "source_ids": source_ids,
                         }
 
         return None
