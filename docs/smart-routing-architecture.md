@@ -504,6 +504,39 @@ The smart router returns routing decisions in `reasoning_content`:
 }
 ```
 
+### Citation Support
+
+When NotebookLM responses include inline citations like `[1]`, `[2]`, the proxy automatically:
+
+1. **Extracts source UUIDs** from streaming chunks
+2. **Resolves UUIDs to source titles** using notebook metadata
+3. **Emits citation events** for Open WebUI compatibility
+
+**Streaming Response (SSE):**
+```
+data: {"choices":[{"delta":{"content":"The paper [1] introduces..."}}]}
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+data: {"type":"source","source":{"name":"Attention Is All You Need.pdf","id":"uuid-1"},"document":[]}
+data: [DONE]
+```
+
+**Non-Streaming Response:**
+```json
+{
+  "id": "chatcmpl-abc123",
+  "choices": [{"message": {"content": "The paper [1] introduces..."}}],
+  "sources": [
+    {"source": {"name": "Attention Is All You Need.pdf", "id": "uuid-1"}, "document": []}
+  ]
+}
+```
+
+**Open WebUI Integration:**
+- Citation numbers `[1]`, `[2]` become clickable references
+- "Sources" section appears below responses
+- Web sources include clickable URLs
+```
+
 ## Error Handling
 
 ### No Notebooks Available

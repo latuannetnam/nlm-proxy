@@ -33,6 +33,7 @@ Connect **any OpenAI client** (Open WebUI, Python SDK, etc.) to NotebookLM:
 | **Streaming** | Real-time streaming responses |
 | **Session Persistence** | Maintains conversation context across queries |
 | **Multi-notebook** | Each notebook appears as a separate model |
+| **Citation Support** | Source citations for Open WebUI with clickable `[1]`, `[2]` references |
 
 ### Smart Request Routing
 Automatically route requests to the best backend using AI-powered classification:
@@ -286,6 +287,8 @@ for chunk in response:
 1. Set `ENABLE_FORWARD_USER_INFO_HEADERS=true` in Open WebUI
 2. Add connection: `http://localhost:8080/v1`
 3. Select a notebook as the model
+
+**Citation Support:** NotebookLM responses with inline citations like `[1]`, `[2]` will display as clickable source references in Open WebUI. A "Sources" section appears below responses showing the referenced documents.
 
 ### Custom Parameters
 
