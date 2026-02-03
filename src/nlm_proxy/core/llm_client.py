@@ -8,7 +8,7 @@ This module is in core/ for reuse across multiple features:
 Uses the official OpenAI SDK for better compatibility and maintainability.
 """
 
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 from openai import AsyncOpenAI
 
@@ -48,7 +48,11 @@ class ExternalLLMClient:
 
     async def complete(self, prompt: str, max_tokens: int = 50) -> str:
         """Get a simple completion (non-streaming)."""
-        logger.debug(f"[LLM] Calling complete: model={self.model}, max_tokens={max_tokens}")
+        return await self.chat_completion(prompt, max_tokens=max_tokens)
+
+    async def chat_completion(self, prompt: str, response_format: Optional[dict] = None, max_tokens: int = 50) -> str:
+        """Get a completion with optional JSON enforcement."""
+        logger.debug(f"[LLM] Calling chat_completion: model={self.model}, max_tokens={max_tokens}, json={response_format is not None}")
         logger.debug(f"[LLM] Request prompt: {prompt[:200]}{'...' if len(prompt) > 200 else ''}")
 
         # Use appropriate parameter based on model version
@@ -57,6 +61,9 @@ class ExternalLLMClient:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0
         }
+
+        if response_format:
+            params["response_format"] = response_format
 
         if self._uses_max_completion_tokens():
             params["max_completion_tokens"] = max_tokens
