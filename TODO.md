@@ -2,6 +2,9 @@
 - ~~1. Configuration settings via env variable and command line argument~~
 - ~~5. OpenAI endpoint authentication~~
 - ~~3. Smart router: LLM question routing~~
-- [ ] 8. Smart router: cross notebook query
+- [] Return notebooklm citation with source link 
+- [] Track notebook query -> NotebookLM query analysis: question, answer, notebook, quality etc...
+- [] Use LLM task to pre-process in individual notebook model
 - [ ] 6. Multiple authentication profiles
 - [ ] 7. Review FastAPI for support async session management: SessionStore, Notebook cache
+- Doing -> [ ] 8. Smart router: cross notebook query: feature/cross-notebook-query

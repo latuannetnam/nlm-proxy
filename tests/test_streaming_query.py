@@ -178,56 +178,69 @@ async def stream_query(
 
 def parse_chunk(json_str: str) -> dict | None:
     """
-    Parse a JSON chunk and extract text and type.
-    
+    Parse a JSON chunk and extract complete response data.
+
     Chunk structure:
     [["wrb.fr", null, "<nested_json>", ...]]
-    
+
     Nested JSON contains:
-    [["text", null, [...], null, [type_info]]]
-    where type_info ends with 1 (answer) or 2 (thinking)
-    
+    [["text", null, [citations_and_metadata], null, [type_info]]]
+    where:
+    - Position 0: text content
+    - Position 2: array with citations, source references, and metadata
+    - Position 4: type_info ending with 1 (answer) or 2 (thinking)
+
     Returns dict with:
     - type: "thinking" or "answer"
     - text: The chunk text
     - raw_type: Original type indicator (1 or 2)
+    - citations: Array of citation data (if present)
+    - sources: Array of source references (if present)
+    - metadata: Additional metadata array (if present)
+    - raw_content: Full content array for debugging
     """
     try:
         parsed = json.loads(json_str)
-        
+
         # Navigate structure: [["wrb.fr", null, nested_json, ...]]
         if not isinstance(parsed, list) or len(parsed) == 0:
             return None
-            
+
         outer = parsed[0]
         if not isinstance(outer, list) or len(outer) < 3:
             return None
-            
+
         # The third element is the nested JSON string
         nested_json_str = outer[2]
         if not isinstance(nested_json_str, str):
             return None
-            
+
         # Parse nested JSON
         nested = json.loads(nested_json_str)
         if not isinstance(nested, list) or len(nested) == 0:
             return None
-            
+
         # Get the first element of nested structure
         content = nested[0]
         if not isinstance(content, list) or len(content) < 5:
             return None
-            
-        # Extract text (position 0) and type info (position 4)
+
+        # Extract text (position 0)
         text = content[0]
-        type_info = content[4]
-        
-        if not isinstance(text, str) or not isinstance(type_info, list):
+        if not isinstance(text, str):
             return None
-            
+
+        # Extract metadata array (position 2) - contains citations and source refs
+        metadata_array = content[2] if len(content) > 2 else None
+
+        # Extract type info (position 4)
+        type_info = content[4]
+        if not isinstance(type_info, list):
+            return None
+
         # Type indicator is last element of type_info array
         type_indicator = type_info[-1] if type_info else None
-        
+
         # Map type: 1 = answer, 2 = thinking
         if type_indicator == 1:
             chunk_type = "answer"
@@ -235,29 +248,69 @@ def parse_chunk(json_str: str) -> dict | None:
             chunk_type = "thinking"
         else:
             chunk_type = "unknown"
-            
+
+        # Parse citations and source references from metadata array
+        citations = []
+        sources = []
+
+        if isinstance(metadata_array, list) and len(metadata_array) > 0:
+            # Try to extract citations (structure varies, need to explore)
+            for item in metadata_array:
+                if isinstance(item, list):
+                    # Potential citation or source reference
+                    if len(item) > 0:
+                        # Store raw for now until we understand the structure
+                        if isinstance(item[0], str):
+                            citations.append(item)
+                        elif isinstance(item, list):
+                            sources.append(item)
+
         return {
             "type": chunk_type,
             "text": text,
             "raw_type": type_indicator,
+            "citations": citations if citations else None,
+            "sources": sources if sources else None,
+            "metadata": metadata_array,
+            "raw_content": content,  # Full array for debugging
         }
-        
+
     except (json.JSONDecodeError, IndexError, TypeError, KeyError):
         return None
 
 
-def format_chunk_output(chunk: dict, show_timestamp: bool = True) -> str:
+def format_chunk_output(chunk: dict, show_timestamp: bool = True, show_metadata: bool = False) -> str:
     """Format a chunk for console output with color and emoji."""
     emoji = "🤔" if chunk["type"] == "thinking" else "💡"
     type_label = chunk["type"].upper()
     timestamp_str = f"[{chunk['timestamp']}s]" if show_timestamp else ""
-    
-    # Truncate long text for cleaner output
+
+    # Build output
+    lines = []
+
+    # Main text
     text = chunk["text"]
-    if len(text) > 200:
+    if len(text) > 200 and not show_metadata:
         text = text[:197] + "..."
-        
-    return f"{emoji} {type_label} {timestamp_str}: {text}"
+
+    lines.append(f"{emoji} {type_label} {timestamp_str}: {text}")
+
+    # Add metadata if requested
+    if show_metadata:
+        if chunk.get("citations"):
+            lines.append(f"   📎 Citations: {len(chunk['citations'])} found")
+            for i, citation in enumerate(chunk["citations"][:3], 1):  # Show first 3
+                lines.append(f"      {i}. {citation}")
+
+        if chunk.get("sources"):
+            lines.append(f"   📚 Sources: {len(chunk['sources'])} references")
+            for i, source in enumerate(chunk["sources"][:3], 1):  # Show first 3
+                lines.append(f"      {i}. {source}")
+
+        if chunk.get("metadata"):
+            lines.append(f"   🔍 Metadata array length: {len(chunk['metadata'])}")
+
+    return "\n".join(lines)
 
 
 async def get_notebook_sources(client: NotebookLMClient, notebook_id: str) -> list[str]:
@@ -273,14 +326,15 @@ async def get_notebook_sources(client: NotebookLMClient, notebook_id: str) -> li
     return source_ids
 
 
-async def test_streaming_query(notebook_id: str, query: str, verbose: bool = False):
+async def test_streaming_query(notebook_id: str, query: str, verbose: bool = False, show_raw: bool = False):
     """
     Test streaming query endpoint with real-time output.
-    
+
     Args:
         notebook_id: The notebook UUID to query
         query: The question to ask
         verbose: Show detailed chunk information
+        show_raw: Show raw JSON structures for debugging
     """
     print("=" * 80)
     print("NotebookLM Streaming Query Test")
@@ -328,11 +382,13 @@ async def test_streaming_query(notebook_id: str, query: str, verbose: bool = Fal
         
         thinking_text = []
         answer_text = []
+        all_chunks = []  # Store all chunks for final analysis
         first_response_logged = False
-        
+
         async for chunk in stream_query(client, notebook_id, query, source_ids):
             stats.mark_first_chunk()
-            
+            all_chunks.append(chunk)
+
             # Log first response received
             if not first_response_logged:
                 first_response_time = time.time()
@@ -340,20 +396,22 @@ async def test_streaming_query(notebook_id: str, query: str, verbose: bool = Fal
                 print(f"\n⚡ First response received at: {time.strftime('%H:%M:%S', time.localtime(first_response_time))}.{int((first_response_time % 1) * 1000):03d}")
                 print(f"   Time to first response: {elapsed:.3f}s\n")
                 first_response_logged = True
-            
+
             # Track chunk
             is_answer = chunk["type"] == "answer"
             stats.add_chunk(is_answer, len(chunk["text"]))
-            
+
             # Store text for final summary
             if is_answer:
                 answer_text.append(chunk["text"])
             else:
                 thinking_text.append(chunk["text"])
-            
+
             # Print chunk
             if verbose:
-                print(format_chunk_output(chunk))
+                print(format_chunk_output(chunk, show_metadata=True))
+                if show_raw and chunk.get("raw_content"):
+                    print(f"   🔧 RAW: {json.dumps(chunk['raw_content'], indent=2)}\n")
             else:
                 # Simplified output - just show dots for thinking, text for answers
                 if is_answer:
@@ -396,8 +454,26 @@ async def test_streaming_query(notebook_id: str, query: str, verbose: bool = Fal
             print(f"\n💡 Final answer ({len(answer_text)} chunks):")
             full_answer = " ".join(answer_text)
             print(f"\n{full_answer}\n")
-        
-        print("=" * 80)
+
+        # Analyze metadata across all chunks
+        print("\n📊 Metadata Analysis:")
+        chunks_with_citations = sum(1 for c in all_chunks if c.get("citations"))
+        chunks_with_sources = sum(1 for c in all_chunks if c.get("sources"))
+        chunks_with_metadata = sum(1 for c in all_chunks if c.get("metadata"))
+
+        print(f"   └─ Chunks with citations: {chunks_with_citations}/{len(all_chunks)}")
+        print(f"   └─ Chunks with sources: {chunks_with_sources}/{len(all_chunks)}")
+        print(f"   └─ Chunks with metadata: {chunks_with_metadata}/{len(all_chunks)}")
+
+        # Show sample metadata structure if available
+        if show_raw and chunks_with_metadata > 0:
+            print("\n🔍 Sample Metadata Structures:")
+            for i, chunk in enumerate(all_chunks[:5], 1):
+                if chunk.get("metadata"):
+                    print(f"\n   Chunk {i} ({chunk['type']}):")
+                    print(f"   {json.dumps(chunk['metadata'], indent=6)}")
+
+        print("\n" + "=" * 80)
         print("✅ Test completed successfully")
         
     finally:
@@ -439,11 +515,17 @@ Examples:
         action="store_true",
         help="Show detailed chunk information as they arrive",
     )
-    
+
+    parser.add_argument(
+        "-r", "--raw",
+        action="store_true",
+        help="Show raw JSON structures for debugging (requires --verbose)",
+    )
+
     args = parser.parse_args()
-    
+
     try:
-        asyncio.run(test_streaming_query(args.notebook_id, args.query, args.verbose))
+        asyncio.run(test_streaming_query(args.notebook_id, args.query, args.verbose, args.raw))
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted by user")
         sys.exit(0)
