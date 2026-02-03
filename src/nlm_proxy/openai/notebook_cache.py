@@ -115,8 +115,22 @@ class NotebookCache:
         """Blocking fetch at startup to warm the cache."""
         logger.info("[CACHE] Performing initial notebook fetch...")
         try:
-            asyncio.run(self._fetch_all_summaries())
-            logger.info(f"[CACHE] Initial fetch complete: {len(self._cache)} notebooks cached")
+            # Use new_event_loop() instead of asyncio.run() to avoid conflicts
+            # with the background thread's event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._fetch_all_summaries())
+                logger.info(f"[CACHE] Initial fetch complete: {len(self._cache)} notebooks cached")
+                # Close the client to release async resources (locks, httpx client)
+                # bound to this event loop. They will be recreated fresh in the
+                # background thread's event loop on next use.
+                loop.run_until_complete(self._nlm_client.close())
+            finally:
+                # Clear the global event loop reference BEFORE closing
+                # This prevents the background thread from seeing a closed loop
+                asyncio.set_event_loop(None)
+                loop.close()
         except Exception as e:
             logger.error(f"[CACHE] Initial fetch failed: {e}")
 
@@ -126,13 +140,21 @@ class NotebookCache:
         refresh_interval = self._ttl_seconds * 0.8
         logger.debug(f"[CACHE] Refresh interval set to {refresh_interval:.0f}s (80% of {self._ttl_seconds}s TTL)")
 
-        while not self._shutdown.wait(timeout=refresh_interval):
-            try:
-                logger.debug("[CACHE] Background refresh starting...")
-                asyncio.run(self._fetch_all_summaries())
-                logger.info(f"[CACHE] Background refresh complete: {len(self._cache)} notebooks")
-            except Exception as e:
-                logger.error(f"[CACHE] Background refresh failed: {e}")
+        # Create a persistent event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            while not self._shutdown.wait(timeout=refresh_interval):
+                try:
+                    logger.debug("[CACHE] Background refresh starting...")
+                    loop.run_until_complete(self._fetch_all_summaries())
+                    logger.info(f"[CACHE] Background refresh complete: {len(self._cache)} notebooks")
+                except Exception as e:
+                    logger.error(f"[CACHE] Background refresh failed: {e}")
+        finally:
+            # Clean up the event loop when thread shuts down
+            loop.close()
 
     async def _fetch_all_summaries(self) -> None:
         """Fetch all notebook summaries and source information from NotebookLM."""

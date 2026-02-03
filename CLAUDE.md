@@ -42,6 +42,20 @@ Detailed documentation in `.claude/memory/`:
 |----------|--------------|
 | `docs/API_REFERENCE.md` | Debugging APIs, adding features, RPC details |
 | `docs/MCP_TEST_PLAN.md` | Testing MCP tools, validation |
+| `docs/ASYNCIO_THREADING_PITFALLS.md` | Asyncio + threading bugs, "Event loop is closed" errors |
+
+## Known Issues & Lessons Learned
+
+Critical issues encountered and resolved in this project:
+
+| Issue | Document | Summary |
+|-------|----------|---------|
+| Event loop is closed | `docs/ASYNCIO_THREADING_PITFALLS.md` | Asyncio objects (Lock, httpx.AsyncClient) bind to their creation event loop. When reused in a different thread's event loop, they fail. **Fix**: Close async clients before switching event loops. |
+
+When debugging asyncio/threading issues:
+1. Check for alternating success/failure patterns → `asyncio.run()` misuse
+2. First operation fails, rest succeed → async object bound to wrong loop
+3. Always close async clients before event loop closes
 
 ## Contributing
 
