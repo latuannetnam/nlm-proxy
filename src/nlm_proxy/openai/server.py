@@ -163,6 +163,10 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
     created = int(time.time())
     conversation_id = None
 
+    # Track source IDs for citation emission (NotebookLM path only)
+    collected_source_ids: list[str] = []
+    notebook_sources: dict[str, dict] = {}
+
     # First, stream the routing decision as reasoning_content
     reasoning_chunk = ChatCompletionChunk(
         id=chunk_id,
@@ -194,9 +198,17 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
                 )
                 yield f"data: {openai_chunk.model_dump_json()}\n\n"
     else:
-        # Stream from NotebookLM - reuse existing logic
+        # Stream from NotebookLM - with citation support
         previous_thinking = ""
         previous_answer = ""
+
+        # Pre-fetch notebook source metadata for citation resolution
+        try:
+            notebook_data = await client.get_notebook(decision.notebook_id)
+            notebook_sources = _extract_source_metadata(notebook_data)
+            logger.debug(f"[SMART-ROUTER] Loaded {len(notebook_sources)} source metadata entries for citations")
+        except Exception as e:
+            logger.warning(f"[SMART-ROUTER] Could not fetch notebook sources for citations: {e}")
 
         async for chunk in client.query_stream(
             notebook_id=decision.notebook_id,
@@ -205,6 +217,11 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
         ):
             chunk_type = chunk.get("type")
             full_text = chunk.get("text", "")
+
+            # Collect source IDs as they appear (maintain order)
+            for sid in chunk.get("source_ids", []):
+                if sid not in collected_source_ids:
+                    collected_source_ids.append(sid)
 
             # Extract conversation_id from first chunk
             new_conv_id = chunk.get("conversation_id")
@@ -252,6 +269,24 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
         choices=[Choice(delta=DeltaContent(), finish_reason="stop")]
     )
     yield f"data: {final_chunk.model_dump_json()}\n\n"
+
+    # Emit citation events for Open WebUI (NotebookLM path only)
+    if collected_source_ids:
+        logger.debug(f"[SMART-ROUTER] Emitting {len(collected_source_ids)} citation events")
+        for source_id in collected_source_ids:
+            source_meta = notebook_sources.get(source_id, {})
+            citation_event = {
+                "type": "source",
+                "source": {
+                    "name": source_meta.get("title", "Unknown Source"),
+                    "id": source_id,
+                },
+                "document": [],
+            }
+            if source_meta.get("url"):
+                citation_event["source"]["url"] = source_meta["url"]
+            yield f"data: {json.dumps(citation_event)}\n\n"
+
     yield "data: [DONE]\n\n"
 
 
@@ -309,6 +344,7 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
             )
 
         # Non-streaming path
+        sources = []  # For citation support
         if decision.request_type == RequestType.LLM_TASK:
             # Call external LLM
             response_text = await router.llm_client.complete(
@@ -316,6 +352,15 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 max_tokens=4096
             )
         else:
+            # Fetch notebook metadata for citation resolution
+            notebook_sources: dict[str, dict] = {}
+            try:
+                notebook_data = await client.get_notebook(decision.notebook_id)
+                notebook_sources = _extract_source_metadata(notebook_data)
+                logger.debug(f"[SMART-ROUTER] Loaded {len(notebook_sources)} source metadata entries for citations")
+            except Exception as e:
+                logger.warning(f"[SMART-ROUTER] Could not fetch notebook sources for citations: {e}")
+
             # Call NotebookLM with conversation_id for continuity
             result = await client.query(
                 notebook_id=decision.notebook_id,
@@ -323,6 +368,7 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 conversation_id=request.conversation_id
             )
             response_text = result.get("answer", "") if result else ""
+            source_ids = result.get("source_ids", []) if result else []
 
             # Save conversation_id to session store if we have a chat_id
             conv_id = result.get("conversation_id", "") if result else ""
@@ -330,7 +376,21 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 app.state.session_store.set(chat_id, conv_id)
                 logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conv_id}")
 
-        return ChatCompletionResponse(
+            # Build sources array for Open WebUI
+            for source_id in source_ids:
+                source_meta = notebook_sources.get(source_id, {})
+                source_entry = {
+                    "source": {
+                        "name": source_meta.get("title", "Unknown Source"),
+                        "id": source_id,
+                    },
+                    "document": [],
+                }
+                if source_meta.get("url"):
+                    source_entry["source"]["url"] = source_meta["url"]
+                sources.append(source_entry)
+
+        response = ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
             created=int(time.time()),
             model=request.model,
@@ -349,6 +409,14 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 total_tokens=len(query) + len(response_text)
             )
         )
+
+        # Return response with sources for Open WebUI
+        response_dict = response.model_dump()
+        if sources:
+            response_dict["sources"] = sources
+            logger.debug(f"[SMART-ROUTER] Added {len(sources)} sources to response")
+
+        return response_dict
     finally:
         await router.close()
         await client.close()
