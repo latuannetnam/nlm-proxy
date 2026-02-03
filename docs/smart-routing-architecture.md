@@ -535,7 +535,7 @@ data: [DONE]
 - Citation numbers `[1]`, `[2]` become clickable references
 - "Sources" section appears below responses
 - Web sources include clickable URLs
-```
+
 
 ## Error Handling
 

@@ -30,26 +30,119 @@ from nlm_proxy.openai.types import (
 logger = get_logger(__name__)
 
 
-def _extract_source_metadata(notebook_data: dict) -> dict[str, dict]:
-    """Extract source ID -> metadata mapping from notebook data.
+def _get_source_metadata_from_cache(notebook_id: str) -> dict[str, dict]:
+    """Get source metadata from NotebookCache if available.
 
     Args:
-        notebook_data: The notebook data from get_notebook() API call
+        notebook_id: The notebook UUID
 
     Returns:
         Dict mapping source_id to {"title": str, "type": str, "url": str|None}
     """
     sources = {}
-    source_list = notebook_data.get("sources", [])
 
-    for source in source_list:
-        source_id = source.get("id")
-        if source_id:
+    # Try to get from cache first (fast path - when smart routing is enabled)
+    if app.state.notebook_cache:
+        cached_notebook = app.state.notebook_cache.get(notebook_id)
+        if cached_notebook and cached_notebook.sources:
+            logger.debug(f"[PROXY] Using cached source metadata: {len(cached_notebook.sources)} sources")
+            for src in cached_notebook.sources:
+                sources[src.id] = {
+                    "title": src.title,
+                    "type": src.source_type,
+                    "url": None,  # URL not stored in SourceInfo
+                }
+            return sources
+        else:
+            logger.debug(f"[PROXY] Notebook {notebook_id} not in cache or has no sources")
+    else:
+        logger.debug(f"[PROXY] NotebookCache not available (smart routing not enabled)")
+
+    return sources
+
+
+def _build_citation_sources_positional(
+    source_ids: list[str],
+    notebook_id: str
+) -> dict[str, dict]:
+    """Build citation source metadata using positional mapping from notebook cache.
+
+    Citation source IDs in streaming responses are query-specific internal references
+    that cannot be resolved via API. Instead, we use positional mapping:
+    - The Nth citation ID maps to the Nth source in the notebook (by order of appearance)
+
+    If notebook cache is available, we use the actual source titles.
+    Otherwise, we fall back to "Source N" naming.
+
+    Args:
+        source_ids: List of citation source UUIDs from streaming (in order)
+        notebook_id: The notebook UUID for cache lookup
+
+    Returns:
+        Dict mapping source_id to {"title": str, "type": str, "url": str|None}
+    """
+    sources = {}
+
+    # Try to get notebook sources from cache for title mapping
+    notebook_sources_list = []
+    if app.state.notebook_cache:
+        cached_notebook = app.state.notebook_cache.get(notebook_id)
+        if cached_notebook and cached_notebook.sources:
+            notebook_sources_list = cached_notebook.sources
+            logger.debug(f"[PROXY] Using {len(notebook_sources_list)} cached sources for positional mapping")
+
+    # Map citation IDs to titles positionally
+    for idx, source_id in enumerate(source_ids):
+        citation_number = idx + 1  # [1], [2], etc.
+
+        if idx < len(notebook_sources_list):
+            # Use actual source title from cache
+            src = notebook_sources_list[idx]
             sources[source_id] = {
-                "title": source.get("title", "Unknown Source"),
-                "type": source.get("type"),
-                "url": source.get("url"),
+                "title": src.title,
+                "type": src.source_type,
+                "url": None,
             }
+            logger.debug(f"[PROXY] Citation [{citation_number}] -> {src.title[:50]}...")
+        else:
+            # Fallback to generic naming
+            sources[source_id] = {
+                "title": f"Source {citation_number}",
+                "type": None,
+                "url": None,
+            }
+            logger.debug(f"[PROXY] Citation [{citation_number}] -> Source {citation_number} (no cache)")
+
+    return sources
+
+
+async def _get_source_metadata_fallback(client, notebook_id: str) -> dict[str, dict]:
+    """Fetch source metadata when cache is not available.
+
+    Args:
+        client: NotebookLM client
+        notebook_id: The notebook UUID
+
+    Returns:
+        Dict mapping source_id to {"title": str, "type": str, "url": str|None}
+    """
+    sources = {}
+
+    try:
+        # Fetch notebook list to get source information
+        notebooks = await client.list_notebooks()
+        for nb in notebooks:
+            if nb.id == notebook_id:
+                logger.debug(f"[PROXY] Fetched source metadata from list_notebooks: {len(nb.sources)} sources")
+                for src in nb.sources:
+                    sources[src["id"]] = {
+                        "title": src["title"],
+                        "type": None,  # Type not in list_notebooks sources
+                        "url": None,
+                    }
+                break
+    except Exception as e:
+        logger.warning(f"[PROXY] Failed to fetch source metadata: {e}")
 
     return sources
 
@@ -165,7 +258,6 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
 
     # Track source IDs for citation emission (NotebookLM path only)
     collected_source_ids: list[str] = []
-    notebook_sources: dict[str, dict] = {}
 
     # First, stream the routing decision as reasoning_content
     reasoning_chunk = ChatCompletionChunk(
@@ -201,14 +293,6 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
         # Stream from NotebookLM - with citation support
         previous_thinking = ""
         previous_answer = ""
-
-        # Pre-fetch notebook source metadata for citation resolution
-        try:
-            notebook_data = await client.get_notebook(decision.notebook_id)
-            notebook_sources = _extract_source_metadata(notebook_data)
-            logger.debug(f"[SMART-ROUTER] Loaded {len(notebook_sources)} source metadata entries for citations")
-        except Exception as e:
-            logger.warning(f"[SMART-ROUTER] Could not fetch notebook sources for citations: {e}")
 
         async for chunk in client.query_stream(
             notebook_id=decision.notebook_id,
@@ -272,9 +356,11 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
 
     # Emit citation events for Open WebUI (NotebookLM path only)
     if collected_source_ids:
+        # Build citation sources using positional mapping from notebook cache
+        resolved_sources = _build_citation_sources_positional(collected_source_ids, decision.notebook_id)
         logger.debug(f"[SMART-ROUTER] Emitting {len(collected_source_ids)} citation events")
         for source_id in collected_source_ids:
-            source_meta = notebook_sources.get(source_id, {})
+            source_meta = resolved_sources.get(source_id, {})
             citation_event = {
                 "type": "source",
                 "source": {
@@ -352,15 +438,6 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 max_tokens=4096
             )
         else:
-            # Fetch notebook metadata for citation resolution
-            notebook_sources: dict[str, dict] = {}
-            try:
-                notebook_data = await client.get_notebook(decision.notebook_id)
-                notebook_sources = _extract_source_metadata(notebook_data)
-                logger.debug(f"[SMART-ROUTER] Loaded {len(notebook_sources)} source metadata entries for citations")
-            except Exception as e:
-                logger.warning(f"[SMART-ROUTER] Could not fetch notebook sources for citations: {e}")
-
             # Call NotebookLM with conversation_id for continuity
             result = await client.query(
                 notebook_id=decision.notebook_id,
@@ -376,19 +453,22 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 app.state.session_store.set(chat_id, conv_id)
                 logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conv_id}")
 
-            # Build sources array for Open WebUI
-            for source_id in source_ids:
-                source_meta = notebook_sources.get(source_id, {})
-                source_entry = {
-                    "source": {
-                        "name": source_meta.get("title", "Unknown Source"),
-                        "id": source_id,
-                    },
-                    "document": [],
-                }
-                if source_meta.get("url"):
-                    source_entry["source"]["url"] = source_meta["url"]
-                sources.append(source_entry)
+            # Build citation sources using positional mapping from notebook cache
+            if source_ids:
+                resolved_sources = _build_citation_sources_positional(source_ids, decision.notebook_id)
+                # Build sources array for Open WebUI
+                for source_id in source_ids:
+                    source_meta = resolved_sources.get(source_id, {})
+                    source_entry = {
+                        "source": {
+                            "name": source_meta.get("title", "Unknown Source"),
+                            "id": source_id,
+                        },
+                        "document": [],
+                    }
+                    if source_meta.get("url"):
+                        source_entry["source"]["url"] = source_meta["url"]
+                    sources.append(source_entry)
 
         response = ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -435,15 +515,6 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
 
     # Track source IDs for citation emission
     collected_source_ids: list[str] = []  # Ordered, unique source IDs
-    notebook_sources: dict[str, dict] = {}  # source_id -> metadata
-
-    # Pre-fetch notebook source metadata for citation resolution
-    try:
-        notebook_data = await client.get_notebook(notebook_id)
-        notebook_sources = _extract_source_metadata(notebook_data)
-        logger.debug(f"[PROXY] Loaded {len(notebook_sources)} source metadata entries for citations")
-    except Exception as e:
-        logger.warning(f"[PROXY] Could not fetch notebook sources for citations: {e}")
 
     logger.debug(f"[NOTEBOOKLM] Starting stream query: notebook_id={notebook_id}, query={query_text[:100]}..., conversation_id={request.conversation_id}, chat_id={chat_id}")
 
@@ -518,9 +589,11 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
 
         # Emit citation events for Open WebUI (after content, before [DONE])
         if collected_source_ids:
+            # Build citation sources using positional mapping from notebook cache
+            resolved_sources = _build_citation_sources_positional(collected_source_ids, notebook_id)
             logger.debug(f"[PROXY] Emitting {len(collected_source_ids)} citation events")
             for source_id in collected_source_ids:
-                source_meta = notebook_sources.get(source_id, {})
+                source_meta = resolved_sources.get(source_id, {})
                 citation_event = {
                     "type": "source",
                     "source": {
@@ -601,11 +674,6 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     # Non-streaming path
     logger.debug("[PROXY] Using non-streaming response")
     try:
-        # Fetch notebook metadata for citation resolution
-        notebook_data = await client.get_notebook(request.model)
-        notebook_sources = _extract_source_metadata(notebook_data)
-        logger.debug(f"[PROXY] Loaded {len(notebook_sources)} source metadata entries for citations")
-
         logger.debug(f"[NOTEBOOKLM] Calling query: notebook_id={request.model}, query={query_text[:100]}..., conversation_id={request.conversation_id}")
         result = await client.query(
             notebook_id=request.model,
@@ -643,20 +711,22 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
             system_fingerprint=f"conv_{conv_id}" if conv_id else None
         )
 
-        # Build sources array for Open WebUI
+        # Build citation sources using positional mapping from notebook cache
         sources = []
-        for source_id in source_ids:
-            source_meta = notebook_sources.get(source_id, {})
-            source_entry = {
-                "source": {
-                    "name": source_meta.get("title", "Unknown Source"),
-                    "id": source_id,
-                },
-                "document": [],
-            }
-            if source_meta.get("url"):
-                source_entry["source"]["url"] = source_meta["url"]
-            sources.append(source_entry)
+        if source_ids:
+            resolved_sources = _build_citation_sources_positional(source_ids, request.model)
+            for source_id in source_ids:
+                source_meta = resolved_sources.get(source_id, {})
+                source_entry = {
+                    "source": {
+                        "name": source_meta.get("title", "Unknown Source"),
+                        "id": source_id,
+                    },
+                    "document": [],
+                }
+                if source_meta.get("url"):
+                    source_entry["source"]["url"] = source_meta["url"]
+                sources.append(source_entry)
 
         # Return response with sources for Open WebUI
         response_dict = response.model_dump()

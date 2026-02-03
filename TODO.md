@@ -1,10 +1,11 @@
-- ~~4. Restructure CLAUDE.md, add section for each component with reference to external file~~
-- ~~1. Configuration settings via env variable and command line argument~~
-- ~~5. OpenAI endpoint authentication~~
-- ~~3. Smart router: LLM question routing~~
-- [] Return notebooklm citation with source link 
+- ~~ Restructure CLAUDE.md, add section for each component with reference to external file~~
+- ~~ Configuration settings via env variable and command line argument~~
+- ~~ OpenAI endpoint authentication~~
+- ~~ Smart router: LLM question routing~~
+
 - [] Track notebook query -> NotebookLM query analysis: question, answer, notebook, quality etc...
 - [] Use LLM task to pre-process in individual notebook model
-- [ ] 6. Multiple authentication profiles
-- [ ] 7. Review FastAPI for support async session management: SessionStore, Notebook cache
-- Doing -> [ ] 8. Smart router: cross notebook query: feature/cross-notebook-query
+- [ ] Multiple authentication profiles
+- [ ] Review FastAPI for support async session management: SessionStore, Notebook cache
+- [Pending]  Smart router: cross notebook query: feature/cross-notebook-query
+- [Pending  -> The current logic not works] Return notebooklm citation with source link: feature/openai-proxy-citation
