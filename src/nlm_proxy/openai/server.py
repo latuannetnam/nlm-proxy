@@ -533,6 +533,11 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     # Non-streaming path
     logger.debug("[PROXY] Using non-streaming response")
     try:
+        # Fetch notebook metadata for citation resolution
+        notebook_data = await client.get_notebook(request.model)
+        notebook_sources = _extract_source_metadata(notebook_data)
+        logger.debug(f"[PROXY] Loaded {len(notebook_sources)} source metadata entries for citations")
+
         logger.debug(f"[NOTEBOOKLM] Calling query: notebook_id={request.model}, query={query_text[:100]}..., conversation_id={request.conversation_id}")
         result = await client.query(
             notebook_id=request.model,
@@ -542,12 +547,13 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
 
         answer = result.get("answer", "") if result else ""
         conv_id = result.get("conversation_id", "") if result else ""
+        source_ids = result.get("source_ids", []) if result else []
 
         # Save conversation_id to session store if we have a chat_id
         if chat_id and conv_id and app.state.session_store:
             app.state.session_store.set(chat_id, conv_id)
 
-        logger.debug(f"[NOTEBOOKLM] Response received: answer_len={len(answer)}, conversation_id={conv_id}")
+        logger.debug(f"[NOTEBOOKLM] Response received: answer_len={len(answer)}, conversation_id={conv_id}, sources={len(source_ids)}")
         logger.debug(f"[NOTEBOOKLM] Answer preview: {answer[:200]}{'...' if len(answer) > 200 else ''}")
 
         # Handle empty responses gracefully
@@ -568,8 +574,30 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
             usage=Usage(prompt_tokens=len(query_text), completion_tokens=len(answer), total_tokens=len(query_text) + len(answer)),
             system_fingerprint=f"conv_{conv_id}" if conv_id else None
         )
+
+        # Build sources array for Open WebUI
+        sources = []
+        for source_id in source_ids:
+            source_meta = notebook_sources.get(source_id, {})
+            source_entry = {
+                "source": {
+                    "name": source_meta.get("title", "Unknown Source"),
+                    "id": source_id,
+                },
+                "document": [],
+            }
+            if source_meta.get("url"):
+                source_entry["source"]["url"] = source_meta["url"]
+            sources.append(source_entry)
+
+        # Return response with sources for Open WebUI
+        response_dict = response.model_dump()
+        if sources:
+            response_dict["sources"] = sources
+            logger.debug(f"[PROXY] Added {len(sources)} sources to response")
+
         logger.debug(f"[PROXY] Returning response with {len(answer)} characters")
-        return response
+        return response_dict
     finally:
         await client.close()
 

@@ -1457,90 +1457,47 @@ class NotebookLMClient:
             - conversation_id: ID to use for follow-up questions
             - turn_number: Which turn this is in the conversation (1 = first)
             - is_follow_up: Whether this was a follow-up query
+            - source_ids: List of source UUIDs referenced in the response
             - raw_response: The raw parsed response (for debugging)
         """
-        import uuid
+        # Use query_stream internally to collect answer and source_ids
+        answer_text = ""
+        collected_source_ids: list[str] = []
+        result_conversation_id = conversation_id
 
-        client = await self._get_client()
+        async for chunk in self.query_stream(
+            notebook_id=notebook_id,
+            query_text=query_text,
+            source_ids=source_ids,
+            conversation_id=conversation_id,
+        ):
+            # Collect source IDs as they appear (maintain order, unique)
+            for sid in chunk.get("source_ids", []):
+                if sid not in collected_source_ids:
+                    collected_source_ids.append(sid)
 
-        # If no source_ids provided, get them from the notebook
-        if source_ids is None:
-            notebook_data = await self.get_notebook(notebook_id)
-            source_ids = self._extract_source_ids_from_notebook(notebook_data)
+            # Track conversation ID
+            if chunk.get("conversation_id"):
+                result_conversation_id = chunk["conversation_id"]
 
-        # Determine if this is a new conversation or follow-up
-        is_new_conversation = conversation_id is None
-        if is_new_conversation:
-            conversation_id = str(uuid.uuid4())
-            conversation_history = None
-        else:
-            # Check if we have cached history for this conversation
-            conversation_history = self._build_conversation_history(conversation_id)
-
-        # Build source IDs structure: [[[sid]]] for each source (3 brackets, not 4!)
-        sources_array = [[[sid]] for sid in source_ids] if source_ids else []
-
-        # Query params structure (from network capture)
-        # For new conversations: params[2] = None
-        # For follow-ups: params[2] = [[answer, null, 2], [query, null, 1], ...]
-        params = [
-            sources_array,
-            query_text,
-            conversation_history,  # None for new, history array for follow-ups
-            [2, None, [1]],
-            conversation_id,
-        ]
-
-        # Use compact JSON format matching Chrome (no spaces)
-        params_json = json.dumps(params, separators=(",", ":"))
-
-        f_req = [None, params_json]
-        f_req_json = json.dumps(f_req, separators=(",", ":"))
-
-        # URL encode with safe='' to encode all characters including /
-        body_parts = [f"f.req={urllib.parse.quote(f_req_json, safe='')}"]
-        if self.csrf_token:
-            body_parts.append(f"at={urllib.parse.quote(self.csrf_token, safe='')}")
-        # Add trailing & to match NotebookLM's format
-        body = "&".join(body_parts) + "&"
-
-        async with self._reqid_lock:
-            self._reqid_counter += 100000  # Increment counter
-            reqid = self._reqid_counter
-
-        url_params = {
-            "bl": os.environ.get("NOTEBOOKLM_BL", "boq_labs-tailwind-frontend_20260108.06_p0"),
-            "hl": "en",
-            "_reqid": str(reqid),
-            "rt": "c",
-        }
-        if self._session_id:
-            url_params["f.sid"] = self._session_id
-
-        query_string = urllib.parse.urlencode(url_params)
-        url = f"{self.BASE_URL}{self.QUERY_ENDPOINT}?{query_string}"
-
-        response = await client.post(url, content=body, timeout=timeout)
-        response.raise_for_status()
-
-        # Parse streaming response
-        answer_text = self._parse_query_response(response.text)
-
-        # Cache this turn for future follow-ups (only if we got an answer)
-        if answer_text:
-            await self._cache_conversation_turn(conversation_id, query_text, answer_text)
+            # Keep the longest answer text (cumulative)
+            if chunk.get("type") == "answer":
+                chunk_text = chunk.get("text", "")
+                if len(chunk_text) > len(answer_text):
+                    answer_text = chunk_text
 
         # Calculate turn number
         async with self._cache_lock:
-            turns = self._conversation_cache.get(conversation_id, [])
+            turns = self._conversation_cache.get(result_conversation_id, [])
             turn_number = len(turns)
 
         return {
             "answer": answer_text,
-            "conversation_id": conversation_id,
+            "conversation_id": result_conversation_id,
             "turn_number": turn_number,
-            "is_follow_up": not is_new_conversation,
-            "raw_response": response.text[:1000] if response.text else "",  # Truncate for debugging
+            "is_follow_up": conversation_id is not None,
+            "source_ids": collected_source_ids,
+            "raw_response": "",  # Not available when using stream internally
         }
 
     async def query_stream(
