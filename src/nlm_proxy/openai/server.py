@@ -365,6 +365,18 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
     previous_thinking = ""
     previous_answer = ""
 
+    # Track source IDs for citation emission
+    collected_source_ids: list[str] = []  # Ordered, unique source IDs
+    notebook_sources: dict[str, dict] = {}  # source_id -> metadata
+
+    # Pre-fetch notebook source metadata for citation resolution
+    try:
+        notebook_data = await client.get_notebook(notebook_id)
+        notebook_sources = _extract_source_metadata(notebook_data)
+        logger.debug(f"[PROXY] Loaded {len(notebook_sources)} source metadata entries for citations")
+    except Exception as e:
+        logger.warning(f"[PROXY] Could not fetch notebook sources for citations: {e}")
+
     logger.debug(f"[NOTEBOOKLM] Starting stream query: notebook_id={notebook_id}, query={query_text[:100]}..., conversation_id={request.conversation_id}, chat_id={chat_id}")
 
     try:
@@ -376,6 +388,11 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
             chunk_count += 1
             chunk_type = chunk.get("type")
             full_text = chunk.get("text", "")
+
+            # Collect source IDs as they appear (maintain order)
+            for sid in chunk.get("source_ids", []):
+                if sid not in collected_source_ids:
+                    collected_source_ids.append(sid)
 
             logger.debug(f"[NOTEBOOKLM] Received chunk #{chunk_count}: type={chunk_type}, text_len={len(full_text)}")
 
@@ -430,6 +447,26 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
             system_fingerprint=f"conv_{conversation_id}" if conversation_id else None
         )
         yield f"data: {final_chunk.model_dump_json()}\n\n"
+
+        # Emit citation events for Open WebUI (after content, before [DONE])
+        if collected_source_ids:
+            logger.debug(f"[PROXY] Emitting {len(collected_source_ids)} citation events")
+            for source_id in collected_source_ids:
+                source_meta = notebook_sources.get(source_id, {})
+                citation_event = {
+                    "type": "source",
+                    "source": {
+                        "name": source_meta.get("title", "Unknown Source"),
+                        "id": source_id,
+                    },
+                    "document": [],  # NotebookLM doesn't provide passage-level refs
+                }
+                # Add URL if available (for web sources)
+                if source_meta.get("url"):
+                    citation_event["source"]["url"] = source_meta["url"]
+
+                yield f"data: {json.dumps(citation_event)}\n\n"
+
         yield "data: [DONE]\n\n"
         logger.debug("[PROXY] Stream finished")
     finally:
