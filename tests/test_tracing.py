@@ -136,8 +136,12 @@ async def test_full_tracing_flow(monkeypatch):
     shutdown_tracing()
 
 
-def test_tracing_settings_request_max_length_default():
+def test_tracing_settings_request_max_length_default(monkeypatch, tmp_path):
     """Test TracingSettings has correct default for request_max_length."""
+    # Clear env vars and change to temp dir to avoid .env files
+    monkeypatch.delenv("NLM_PROXY_OTEL_REQUEST_MAX_LENGTH", raising=False)
+    monkeypatch.chdir(tmp_path)
+
     from nlm_proxy.core.config import TracingSettings
 
     settings = TracingSettings()
@@ -159,8 +163,12 @@ def test_tracing_settings_request_max_length_from_env(monkeypatch):
     assert settings.request_max_length == 1000
 
 
-def test_tracing_settings_response_max_length_default():
+def test_tracing_settings_response_max_length_default(monkeypatch, tmp_path):
     """Test TracingSettings has correct default for response_max_length."""
+    # Clear env vars and change to temp dir to avoid .env files
+    monkeypatch.delenv("NLM_PROXY_OTEL_RESPONSE_MAX_LENGTH", raising=False)
+    monkeypatch.chdir(tmp_path)
+
     from nlm_proxy.core.config import TracingSettings
 
     settings = TracingSettings()

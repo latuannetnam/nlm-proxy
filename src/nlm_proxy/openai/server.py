@@ -133,120 +133,118 @@ async def list_models():
         await client.close()
 
 
-async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest, chat_id: str = None, tracing_settings=None):
-    """Stream response with routing reasoning as reasoning_content and response tracing."""
-    tracer = get_tracer(__name__)
+async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest, chat_id: str = None, span=None, tracing_settings=None):
+    """Stream response with routing reasoning as reasoning_content and response tracing.
 
-    with tracer.start_as_current_span("smart_router.handle_request") as span:
-        # Add user_query to span (using configurable max length)
-        if tracing_settings and tracing_settings.request_max_length > 0:
-            span.set_attribute("user_query", query[:tracing_settings.request_max_length])
+    Args:
+        span: The parent span from handle_smart_routing to add response attributes to.
+              This avoids creating duplicate spans in the same trace.
+    """
+    # Determine response source
+    response_source = "llm" if decision.request_type == RequestType.LLM_TASK else "notebooklm"
 
-        # Determine response source
-        response_source = "llm" if decision.request_type == RequestType.LLM_TASK else "notebooklm"
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    created = int(time.time())
+    conversation_id = None
+    accumulated_response = ""
 
-        chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-        created = int(time.time())
-        conversation_id = None
-        accumulated_response = ""
+    # First, stream the routing decision as reasoning_content
+    reasoning_chunk = ChatCompletionChunk(
+        id=chunk_id,
+        created=created,
+        model=request.model,
+        choices=[Choice(delta=DeltaContent(reasoning_content=decision.reasoning + "\n\n"))]
+    )
+    yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
 
-        # First, stream the routing decision as reasoning_content
-        reasoning_chunk = ChatCompletionChunk(
-            id=chunk_id,
-            created=created,
-            model=request.model,
-            choices=[Choice(delta=DeltaContent(reasoning_content=decision.reasoning + "\n\n"))]
-        )
-        yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
+    if decision.request_type == RequestType.LLM_TASK:
+        # Stream from external LLM
+        messages = [{"role": m.role, "content": m.content} for m in request.messages]
+        stream = await router.llm_client.stream(messages)
+        async for chunk in stream:
+            # Safety check: some chunks may have empty choices array
+            if not chunk.choices:
+                continue
 
-        if decision.request_type == RequestType.LLM_TASK:
-            # Stream from external LLM
-            messages = [{"role": m.role, "content": m.content} for m in request.messages]
-            stream = await router.llm_client.stream(messages)
-            async for chunk in stream:
-                # Safety check: some chunks may have empty choices array
-                if not chunk.choices:
-                    continue
+            # Safety check: delta and content may be None
+            delta = chunk.choices[0].delta
+            delta_content = delta.content if delta and delta.content else ""
 
-                # Safety check: delta and content may be None
-                delta = chunk.choices[0].delta
-                delta_content = delta.content if delta and delta.content else ""
+            if delta_content:
+                accumulated_response += delta_content  # Accumulate for tracing
+                openai_chunk = ChatCompletionChunk(
+                    id=chunk_id,
+                    created=created,
+                    model=request.model,
+                    choices=[Choice(delta=DeltaContent(content=delta_content))]
+                )
+                yield f"data: {openai_chunk.model_dump_json()}\n\n"
+    else:
+        # Stream from NotebookLM - reuse existing logic
+        previous_thinking = ""
+        previous_answer = ""
 
-                if delta_content:
-                    accumulated_response += delta_content  # Accumulate for tracing
+        async for chunk in client.query_stream(
+            notebook_id=decision.notebook_id,
+            query_text=query,
+            conversation_id=request.conversation_id
+        ):
+            chunk_type = chunk.get("type")
+            full_text = chunk.get("text", "")
+
+            # Extract conversation_id from first chunk
+            new_conv_id = chunk.get("conversation_id")
+            if new_conv_id and not conversation_id:
+                conversation_id = new_conv_id
+                # Save to session store if we have a chat_id
+                if chat_id and app.state.session_store:
+                    app.state.session_store.set(chat_id, conversation_id)
+                    logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conversation_id}")
+
+            if chunk_type == "thinking" and not request.include_thinking:
+                previous_thinking = full_text
+                continue
+
+            if chunk_type == "thinking":
+                delta_text = full_text[len(previous_thinking):]
+                previous_thinking = full_text
+                if delta_text:
+                    delta = DeltaContent(reasoning_content=delta_text)
                     openai_chunk = ChatCompletionChunk(
                         id=chunk_id,
                         created=created,
                         model=request.model,
-                        choices=[Choice(delta=DeltaContent(content=delta_content))]
+                        choices=[Choice(delta=delta)]
                     )
                     yield f"data: {openai_chunk.model_dump_json()}\n\n"
-        else:
-            # Stream from NotebookLM - reuse existing logic
-            previous_thinking = ""
-            previous_answer = ""
+            else:
+                delta_text = full_text[len(previous_answer):]
+                previous_answer = full_text
+                if delta_text:
+                    accumulated_response += delta_text  # Accumulate for tracing
+                    delta = DeltaContent(content=delta_text)
+                    openai_chunk = ChatCompletionChunk(
+                        id=chunk_id,
+                        created=created,
+                        model=request.model,
+                        choices=[Choice(delta=delta)]
+                    )
+                    yield f"data: {openai_chunk.model_dump_json()}\n\n"
 
-            async for chunk in client.query_stream(
-                notebook_id=decision.notebook_id,
-                query_text=query,
-                conversation_id=request.conversation_id
-            ):
-                chunk_type = chunk.get("type")
-                full_text = chunk.get("text", "")
+    # Add response to trace using parent span BEFORE final yield
+    if span and tracing_settings and tracing_settings.response_max_length > 0:
+        span.set_attribute("response_content", accumulated_response[:tracing_settings.response_max_length])
+        span.set_attribute("response_source", response_source)
 
-                # Extract conversation_id from first chunk
-                new_conv_id = chunk.get("conversation_id")
-                if new_conv_id and not conversation_id:
-                    conversation_id = new_conv_id
-                    # Save to session store if we have a chat_id
-                    if chat_id and app.state.session_store:
-                        app.state.session_store.set(chat_id, conversation_id)
-                        logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conversation_id}")
-
-                if chunk_type == "thinking" and not request.include_thinking:
-                    previous_thinking = full_text
-                    continue
-
-                if chunk_type == "thinking":
-                    delta_text = full_text[len(previous_thinking):]
-                    previous_thinking = full_text
-                    if delta_text:
-                        delta = DeltaContent(reasoning_content=delta_text)
-                        openai_chunk = ChatCompletionChunk(
-                            id=chunk_id,
-                            created=created,
-                            model=request.model,
-                            choices=[Choice(delta=delta)]
-                        )
-                        yield f"data: {openai_chunk.model_dump_json()}\n\n"
-                else:
-                    delta_text = full_text[len(previous_answer):]
-                    previous_answer = full_text
-                    if delta_text:
-                        accumulated_response += delta_text  # Accumulate for tracing
-                        delta = DeltaContent(content=delta_text)
-                        openai_chunk = ChatCompletionChunk(
-                            id=chunk_id,
-                            created=created,
-                            model=request.model,
-                            choices=[Choice(delta=delta)]
-                        )
-                        yield f"data: {openai_chunk.model_dump_json()}\n\n"
-
-        # Add response to trace BEFORE final yield
-        if tracing_settings and tracing_settings.response_max_length > 0:
-            span.set_attribute("response_content", accumulated_response[:tracing_settings.response_max_length])
-            span.set_attribute("response_source", response_source)
-
-        # Final chunk
-        final_chunk = ChatCompletionChunk(
-            id=chunk_id,
-            created=created,
-            model=request.model,
-            choices=[Choice(delta=DeltaContent(), finish_reason="stop")]
-        )
-        yield f"data: {final_chunk.model_dump_json()}\n\n"
-        yield "data: [DONE]\n\n"
+    # Final chunk
+    final_chunk = ChatCompletionChunk(
+        id=chunk_id,
+        created=created,
+        model=request.model,
+        choices=[Choice(delta=DeltaContent(), finish_reason="stop")]
+    )
+    yield f"data: {final_chunk.model_dump_json()}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 async def handle_smart_routing(request: ChatCompletionRequest, http_request: Request):
@@ -306,9 +304,9 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
             logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
 
             if request.stream:
-                # Pass tracing settings to streaming function
+                # Pass span to streaming function for response tracing
                 return StreamingResponse(
-                    stream_smart_response(client, router, decision, query, request, chat_id, tracing_settings),
+                    stream_smart_response(client, router, decision, query, request, chat_id, span, tracing_settings),
                     media_type="text/event-stream"
                 )
 
