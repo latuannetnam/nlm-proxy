@@ -11,9 +11,9 @@ from fastapi.responses import StreamingResponse
 
 from nlm_proxy.core import NotebookLMClient
 from nlm_proxy.core.auth import load_cached_tokens
-from nlm_proxy.core.config import get_openai_settings, get_routing_settings
+from nlm_proxy.core.config import get_openai_settings, get_routing_settings, get_tracing_settings
 from nlm_proxy.core.logging import get_logger
-from nlm_proxy.core.tracing import init_tracing, shutdown_tracing, instrument_fastapi, instrument_httpx
+from nlm_proxy.core.tracing import init_tracing, shutdown_tracing, instrument_fastapi, instrument_httpx, get_tracer, add_span_attributes
 from nlm_proxy.openai.notebook_cache import NotebookCache
 from nlm_proxy.openai.router import SmartRouter, RequestType
 from nlm_proxy.openai.session import SessionStore
@@ -234,100 +234,119 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
 async def handle_smart_routing(request: ChatCompletionRequest, http_request: Request):
     """Handle requests to the smart router model."""
     routing_settings = get_routing_settings()
-    client = await get_client()
+    tracing_settings = get_tracing_settings()
+    tracer = get_tracer(__name__)
 
-    # Use shared notebook cache from app.state
-    if not app.state.notebook_cache:
-        raise HTTPException(
-            status_code=503,
-            detail="Notebook cache not initialized. Smart routing is not available."
+    with tracer.start_as_current_span("smart_router.handle_request") as span:
+        client = await get_client()
+
+        # Use shared notebook cache from app.state
+        if not app.state.notebook_cache:
+            raise HTTPException(
+                status_code=503,
+                detail="Notebook cache not initialized. Smart routing is not available."
+            )
+
+        router = SmartRouter(
+            nlm_client=client,
+            notebook_cache=app.state.notebook_cache,
+            llm_base_url=routing_settings.llm_base_url,
+            llm_api_key=routing_settings.llm_api_key,
+            llm_model=routing_settings.llm_model,
+            allowed_notebooks=routing_settings.allowed_notebooks
         )
 
-    router = SmartRouter(
-        nlm_client=client,
-        notebook_cache=app.state.notebook_cache,
-        llm_base_url=routing_settings.llm_base_url,
-        llm_api_key=routing_settings.llm_api_key,
-        llm_model=routing_settings.llm_model,
-        allowed_notebooks=routing_settings.allowed_notebooks
-    )
+        # Extract chat_id from headers or request metadata
+        chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
+        if not chat_id and hasattr(request, 'metadata') and request.metadata:
+            chat_id = request.metadata.get("chat_id")
 
-    # Extract chat_id from headers or request metadata (same as regular endpoint)
-    chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
-    if not chat_id and hasattr(request, 'metadata') and request.metadata:
-        chat_id = request.metadata.get("chat_id")
+        logger.debug(f"[SMART-ROUTER] Extracted chat_id: {chat_id}")
 
-    logger.debug(f"[SMART-ROUTER] Extracted chat_id: {chat_id}")
+        # Load existing conversation_id from session store if chat_id exists
+        if chat_id and app.state.session_store:
+            stored_conv_id = app.state.session_store.get(chat_id)
+            if stored_conv_id:
+                logger.info(f"[SMART-ROUTER] Reusing conversation: chat_id={chat_id}, conversation_id={stored_conv_id}")
+                request.conversation_id = stored_conv_id
+            else:
+                logger.info(f"[SMART-ROUTER] New conversation for chat_id={chat_id}")
 
-    # Load existing conversation_id from session store if chat_id exists
-    if chat_id and app.state.session_store:
-        stored_conv_id = app.state.session_store.get(chat_id)
-        if stored_conv_id:
-            logger.info(f"[SMART-ROUTER] Reusing conversation: chat_id={chat_id}, conversation_id={stored_conv_id}")
-            request.conversation_id = stored_conv_id
-        else:
-            logger.info(f"[SMART-ROUTER] New conversation for chat_id={chat_id}")
+        try:
+            user_messages = [m for m in request.messages if m.role == "user"]
+            if not user_messages:
+                raise HTTPException(status_code=400, detail="No user message found")
 
-    try:
-        user_messages = [m for m in request.messages if m.role == "user"]
-        if not user_messages:
-            raise HTTPException(status_code=400, detail="No user message found")
+            query = user_messages[-1].content
 
-        query = user_messages[-1].content
-        decision = await router.route(query)
+            # Add user_query to span (using configurable max length)
+            if tracing_settings.request_max_length > 0:
+                add_span_attributes(user_query=query[:tracing_settings.request_max_length])
 
-        logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
+            decision = await router.route(query)
 
-        if request.stream:
-            return StreamingResponse(
-                stream_smart_response(client, router, decision, query, request, chat_id),
-                media_type="text/event-stream"
+            logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
+
+            if request.stream:
+                # Pass tracing settings to streaming function
+                return StreamingResponse(
+                    stream_smart_response(client, router, decision, query, request, chat_id, tracing_settings),
+                    media_type="text/event-stream"
+                )
+
+            # Non-streaming path
+            if decision.request_type == RequestType.LLM_TASK:
+                # Call external LLM
+                response_text = await router.llm_client.complete(
+                    query,
+                    max_tokens=4096
+                )
+                response_source = "llm"
+            else:
+                # Call NotebookLM with conversation_id for continuity
+                result = await client.query(
+                    notebook_id=decision.notebook_id,
+                    query_text=query,
+                    conversation_id=request.conversation_id
+                )
+                response_text = result.get("answer", "") if result else ""
+                response_source = "notebooklm"
+
+                # Save conversation_id to session store if we have a chat_id
+                conv_id = result.get("conversation_id", "") if result else ""
+                if chat_id and conv_id and app.state.session_store:
+                    app.state.session_store.set(chat_id, conv_id)
+                    logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conv_id}")
+
+            # Add response to trace
+            if tracing_settings.response_max_length > 0:
+                add_span_attributes(
+                    response_content=response_text[:tracing_settings.response_max_length],
+                    response_source=response_source
+                )
+
+            return ChatCompletionResponse(
+                id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                created=int(time.time()),
+                model=request.model,
+                choices=[ResponseChoice(
+                    index=0,
+                    message=ResponseMessage(
+                        role="assistant",
+                        content=response_text,
+                        reasoning_content=decision.reasoning
+                    ),
+                    finish_reason="stop"
+                )],
+                usage=Usage(
+                    prompt_tokens=len(query),
+                    completion_tokens=len(response_text),
+                    total_tokens=len(query) + len(response_text)
+                )
             )
-
-        # Non-streaming path
-        if decision.request_type == RequestType.LLM_TASK:
-            # Call external LLM
-            response_text = await router.llm_client.complete(
-                query,
-                max_tokens=4096
-            )
-        else:
-            # Call NotebookLM with conversation_id for continuity
-            result = await client.query(
-                notebook_id=decision.notebook_id,
-                query_text=query,
-                conversation_id=request.conversation_id
-            )
-            response_text = result.get("answer", "") if result else ""
-
-            # Save conversation_id to session store if we have a chat_id
-            conv_id = result.get("conversation_id", "") if result else ""
-            if chat_id and conv_id and app.state.session_store:
-                app.state.session_store.set(chat_id, conv_id)
-                logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conv_id}")
-
-        return ChatCompletionResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-            created=int(time.time()),
-            model=request.model,
-            choices=[ResponseChoice(
-                index=0,
-                message=ResponseMessage(
-                    role="assistant",
-                    content=response_text,
-                    reasoning_content=decision.reasoning
-                ),
-                finish_reason="stop"
-            )],
-            usage=Usage(
-                prompt_tokens=len(query),
-                completion_tokens=len(response_text),
-                total_tokens=len(query) + len(response_text)
-            )
-        )
-    finally:
-        await router.close()
-        await client.close()
+        finally:
+            await router.close()
+            await client.close()
 
 
 async def stream_response(client, notebook_id: str, query_text: str, request: ChatCompletionRequest, chat_id: str = None):
