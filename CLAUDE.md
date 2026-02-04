@@ -4,6 +4,9 @@
 
 **NLM Proxy** - Provides programmatic access to NotebookLM (notebooklm.google.com) using internal APIs. Tested with personal/free tier accounts.
 
+## Rules
+- After done planing for new feature, always write plan to docs/plan folder
+
 ## Quick Commands
 
 ```bash
