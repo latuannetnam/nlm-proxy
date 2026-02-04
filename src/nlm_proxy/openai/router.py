@@ -166,7 +166,7 @@ class SmartRouter:
     async def route(self, query: str) -> RoutingDecision:
         """Classify and route the request."""
         logger.info(f"[ROUTER] Starting routing for query: {query[:50]}...")
-        add_span_attributes(user_query=query[:500])  # Truncate for storage
+        # user_query attribute moved to smart_router.handle_request span
 
         request_type = await self.classify_request(query)
 
