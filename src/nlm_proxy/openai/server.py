@@ -133,118 +133,125 @@ async def list_models():
         await client.close()
 
 
-async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest, chat_id: str = None, span=None, tracing_settings=None):
+async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest, chat_id: str = None, tracing_settings=None):
     """Stream response with routing reasoning as reasoning_content and response tracing.
 
-    Args:
-        span: The parent span from handle_smart_routing to add response attributes to.
-              This avoids creating duplicate spans in the same trace.
+    Note: This function creates its own span because the span must live for the full
+    streaming duration. The parent function (handle_smart_routing) does NOT create
+    a span for streaming requests to avoid duplicates.
     """
-    # Determine response source
-    response_source = "llm" if decision.request_type == RequestType.LLM_TASK else "notebooklm"
+    tracer = get_tracer(__name__)
 
-    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-    created = int(time.time())
-    conversation_id = None
-    accumulated_response = ""
+    with tracer.start_as_current_span("smart_router.handle_request") as span:
+        # Add user_query to span (using configurable max length)
+        if tracing_settings and tracing_settings.request_max_length > 0:
+            span.set_attribute("user_query", query[:tracing_settings.request_max_length])
 
-    # First, stream the routing decision as reasoning_content
-    reasoning_chunk = ChatCompletionChunk(
-        id=chunk_id,
-        created=created,
-        model=request.model,
-        choices=[Choice(delta=DeltaContent(reasoning_content=decision.reasoning + "\n\n"))]
-    )
-    yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
+        # Determine response source
+        response_source = "llm" if decision.request_type == RequestType.LLM_TASK else "notebooklm"
 
-    if decision.request_type == RequestType.LLM_TASK:
-        # Stream from external LLM
-        messages = [{"role": m.role, "content": m.content} for m in request.messages]
-        stream = await router.llm_client.stream(messages)
-        async for chunk in stream:
-            # Safety check: some chunks may have empty choices array
-            if not chunk.choices:
-                continue
+        chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        created = int(time.time())
+        conversation_id = None
+        accumulated_response = ""
 
-            # Safety check: delta and content may be None
-            delta = chunk.choices[0].delta
-            delta_content = delta.content if delta and delta.content else ""
+        # First, stream the routing decision as reasoning_content
+        reasoning_chunk = ChatCompletionChunk(
+            id=chunk_id,
+            created=created,
+            model=request.model,
+            choices=[Choice(delta=DeltaContent(reasoning_content=decision.reasoning + "\n\n"))]
+        )
+        yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
 
-            if delta_content:
-                accumulated_response += delta_content  # Accumulate for tracing
-                openai_chunk = ChatCompletionChunk(
-                    id=chunk_id,
-                    created=created,
-                    model=request.model,
-                    choices=[Choice(delta=DeltaContent(content=delta_content))]
-                )
-                yield f"data: {openai_chunk.model_dump_json()}\n\n"
-    else:
-        # Stream from NotebookLM - reuse existing logic
-        previous_thinking = ""
-        previous_answer = ""
+        if decision.request_type == RequestType.LLM_TASK:
+            # Stream from external LLM
+            messages = [{"role": m.role, "content": m.content} for m in request.messages]
+            stream = await router.llm_client.stream(messages)
+            async for chunk in stream:
+                # Safety check: some chunks may have empty choices array
+                if not chunk.choices:
+                    continue
 
-        async for chunk in client.query_stream(
-            notebook_id=decision.notebook_id,
-            query_text=query,
-            conversation_id=request.conversation_id
-        ):
-            chunk_type = chunk.get("type")
-            full_text = chunk.get("text", "")
+                # Safety check: delta and content may be None
+                delta = chunk.choices[0].delta
+                delta_content = delta.content if delta and delta.content else ""
 
-            # Extract conversation_id from first chunk
-            new_conv_id = chunk.get("conversation_id")
-            if new_conv_id and not conversation_id:
-                conversation_id = new_conv_id
-                # Save to session store if we have a chat_id
-                if chat_id and app.state.session_store:
-                    app.state.session_store.set(chat_id, conversation_id)
-                    logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conversation_id}")
-
-            if chunk_type == "thinking" and not request.include_thinking:
-                previous_thinking = full_text
-                continue
-
-            if chunk_type == "thinking":
-                delta_text = full_text[len(previous_thinking):]
-                previous_thinking = full_text
-                if delta_text:
-                    delta = DeltaContent(reasoning_content=delta_text)
+                if delta_content:
+                    accumulated_response += delta_content  # Accumulate for tracing
                     openai_chunk = ChatCompletionChunk(
                         id=chunk_id,
                         created=created,
                         model=request.model,
-                        choices=[Choice(delta=delta)]
+                        choices=[Choice(delta=DeltaContent(content=delta_content))]
                     )
                     yield f"data: {openai_chunk.model_dump_json()}\n\n"
-            else:
-                delta_text = full_text[len(previous_answer):]
-                previous_answer = full_text
-                if delta_text:
-                    accumulated_response += delta_text  # Accumulate for tracing
-                    delta = DeltaContent(content=delta_text)
-                    openai_chunk = ChatCompletionChunk(
-                        id=chunk_id,
-                        created=created,
-                        model=request.model,
-                        choices=[Choice(delta=delta)]
-                    )
-                    yield f"data: {openai_chunk.model_dump_json()}\n\n"
+        else:
+            # Stream from NotebookLM - reuse existing logic
+            previous_thinking = ""
+            previous_answer = ""
 
-    # Add response to trace using parent span BEFORE final yield
-    if span and tracing_settings and tracing_settings.response_max_length > 0:
-        span.set_attribute("response_content", accumulated_response[:tracing_settings.response_max_length])
-        span.set_attribute("response_source", response_source)
+            async for chunk in client.query_stream(
+                notebook_id=decision.notebook_id,
+                query_text=query,
+                conversation_id=request.conversation_id
+            ):
+                chunk_type = chunk.get("type")
+                full_text = chunk.get("text", "")
 
-    # Final chunk
-    final_chunk = ChatCompletionChunk(
-        id=chunk_id,
-        created=created,
-        model=request.model,
-        choices=[Choice(delta=DeltaContent(), finish_reason="stop")]
-    )
-    yield f"data: {final_chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
+                # Extract conversation_id from first chunk
+                new_conv_id = chunk.get("conversation_id")
+                if new_conv_id and not conversation_id:
+                    conversation_id = new_conv_id
+                    # Save to session store if we have a chat_id
+                    if chat_id and app.state.session_store:
+                        app.state.session_store.set(chat_id, conversation_id)
+                        logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conversation_id}")
+
+                if chunk_type == "thinking" and not request.include_thinking:
+                    previous_thinking = full_text
+                    continue
+
+                if chunk_type == "thinking":
+                    delta_text = full_text[len(previous_thinking):]
+                    previous_thinking = full_text
+                    if delta_text:
+                        delta = DeltaContent(reasoning_content=delta_text)
+                        openai_chunk = ChatCompletionChunk(
+                            id=chunk_id,
+                            created=created,
+                            model=request.model,
+                            choices=[Choice(delta=delta)]
+                        )
+                        yield f"data: {openai_chunk.model_dump_json()}\n\n"
+                else:
+                    delta_text = full_text[len(previous_answer):]
+                    previous_answer = full_text
+                    if delta_text:
+                        accumulated_response += delta_text  # Accumulate for tracing
+                        delta = DeltaContent(content=delta_text)
+                        openai_chunk = ChatCompletionChunk(
+                            id=chunk_id,
+                            created=created,
+                            model=request.model,
+                            choices=[Choice(delta=delta)]
+                        )
+                        yield f"data: {openai_chunk.model_dump_json()}\n\n"
+
+        # Add response to trace BEFORE final yield (span still open)
+        if tracing_settings and tracing_settings.response_max_length > 0:
+            span.set_attribute("response_content", accumulated_response[:tracing_settings.response_max_length])
+            span.set_attribute("response_source", response_source)
+
+        # Final chunk
+        final_chunk = ChatCompletionChunk(
+            id=chunk_id,
+            created=created,
+            model=request.model,
+            choices=[Choice(delta=DeltaContent(), finish_reason="stop")]
+        )
+        yield f"data: {final_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
 
 
 async def handle_smart_routing(request: ChatCompletionRequest, http_request: Request):
@@ -253,41 +260,68 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
     tracing_settings = get_tracing_settings()
     tracer = get_tracer(__name__)
 
-    with tracer.start_as_current_span("smart_router.handle_request") as span:
-        client = await get_client()
+    client = await get_client()
 
-        # Use shared notebook cache from app.state
-        if not app.state.notebook_cache:
-            raise HTTPException(
-                status_code=503,
-                detail="Notebook cache not initialized. Smart routing is not available."
-            )
-
-        router = SmartRouter(
-            nlm_client=client,
-            notebook_cache=app.state.notebook_cache,
-            llm_base_url=routing_settings.llm_base_url,
-            llm_api_key=routing_settings.llm_api_key,
-            llm_model=routing_settings.llm_model,
-            allowed_notebooks=routing_settings.allowed_notebooks
+    # Use shared notebook cache from app.state
+    if not app.state.notebook_cache:
+        await client.close()
+        raise HTTPException(
+            status_code=503,
+            detail="Notebook cache not initialized. Smart routing is not available."
         )
 
-        # Extract chat_id from headers or request metadata
-        chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
-        if not chat_id and hasattr(request, 'metadata') and request.metadata:
-            chat_id = request.metadata.get("chat_id")
+    router = SmartRouter(
+        nlm_client=client,
+        notebook_cache=app.state.notebook_cache,
+        llm_base_url=routing_settings.llm_base_url,
+        llm_api_key=routing_settings.llm_api_key,
+        llm_model=routing_settings.llm_model,
+        allowed_notebooks=routing_settings.allowed_notebooks
+    )
 
-        logger.debug(f"[SMART-ROUTER] Extracted chat_id: {chat_id}")
+    # Extract chat_id from headers or request metadata
+    chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
+    if not chat_id and hasattr(request, 'metadata') and request.metadata:
+        chat_id = request.metadata.get("chat_id")
 
-        # Load existing conversation_id from session store if chat_id exists
-        if chat_id and app.state.session_store:
-            stored_conv_id = app.state.session_store.get(chat_id)
-            if stored_conv_id:
-                logger.info(f"[SMART-ROUTER] Reusing conversation: chat_id={chat_id}, conversation_id={stored_conv_id}")
-                request.conversation_id = stored_conv_id
-            else:
-                logger.info(f"[SMART-ROUTER] New conversation for chat_id={chat_id}")
+    logger.debug(f"[SMART-ROUTER] Extracted chat_id: {chat_id}")
 
+    # Load existing conversation_id from session store if chat_id exists
+    if chat_id and app.state.session_store:
+        stored_conv_id = app.state.session_store.get(chat_id)
+        if stored_conv_id:
+            logger.info(f"[SMART-ROUTER] Reusing conversation: chat_id={chat_id}, conversation_id={stored_conv_id}")
+            request.conversation_id = stored_conv_id
+        else:
+            logger.info(f"[SMART-ROUTER] New conversation for chat_id={chat_id}")
+
+    # For streaming requests, the generator owns the span (so it lives for full duration)
+    # For non-streaming, we create the span here
+    if request.stream:
+        try:
+            user_messages = [m for m in request.messages if m.role == "user"]
+            if not user_messages:
+                await router.close()
+                await client.close()
+                raise HTTPException(status_code=400, detail="No user message found")
+
+            query = user_messages[-1].content
+            decision = await router.route(query)
+
+            logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
+
+            # Streaming: generator creates its own span to capture response
+            return StreamingResponse(
+                stream_smart_response(client, router, decision, query, request, chat_id, tracing_settings),
+                media_type="text/event-stream"
+            )
+        except Exception:
+            await router.close()
+            await client.close()
+            raise
+
+    # Non-streaming path: create span here
+    with tracer.start_as_current_span("smart_router.handle_request") as span:
         try:
             user_messages = [m for m in request.messages if m.role == "user"]
             if not user_messages:
@@ -303,14 +337,6 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
             logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
 
-            if request.stream:
-                # Pass span to streaming function for response tracing
-                return StreamingResponse(
-                    stream_smart_response(client, router, decision, query, request, chat_id, span, tracing_settings),
-                    media_type="text/event-stream"
-                )
-
-            # Non-streaming path
             if decision.request_type == RequestType.LLM_TASK:
                 # Call external LLM
                 response_text = await router.llm_client.complete(
