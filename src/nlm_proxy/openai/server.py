@@ -13,6 +13,7 @@ from nlm_proxy.core import NotebookLMClient
 from nlm_proxy.core.auth import load_cached_tokens
 from nlm_proxy.core.config import get_openai_settings, get_routing_settings
 from nlm_proxy.core.logging import get_logger
+from nlm_proxy.core.tracing import init_tracing, shutdown_tracing, instrument_fastapi, instrument_httpx
 from nlm_proxy.openai.notebook_cache import NotebookCache
 from nlm_proxy.openai.router import SmartRouter, RequestType
 from nlm_proxy.openai.session import SessionStore
@@ -558,6 +559,11 @@ async def session_stats():
 
 def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     """Run the OpenAI-compatible proxy server."""
+    # Initialize OpenTelemetry tracing
+    init_tracing()
+    instrument_fastapi(app)
+    instrument_httpx()
+
     # Initialize session store with configured TTL
     app.state.session_store = SessionStore(ttl_seconds=session_ttl)
     logger.info(f"Session store initialized with TTL={session_ttl}s ({session_ttl/3600:.1f} hours)")
@@ -594,6 +600,8 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     try:
         uvicorn.run(app, host=host, port=port)
     finally:
+        # Shutdown tracing first to flush pending spans
+        shutdown_tracing()
         # Cleanup notebook cache on shutdown
         if app.state.notebook_cache:
             app.state.notebook_cache.shutdown()

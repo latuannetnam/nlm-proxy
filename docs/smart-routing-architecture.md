@@ -696,8 +696,9 @@ for chunk in response:
 ```
 src/nlm_proxy/
 ├── core/
-│   ├── config.py          # SmartRoutingSettings (with source_fetch_concurrency)
-│   └── llm_client.py      # ExternalLLMClient
+│   ├── config.py          # SmartRoutingSettings, TracingSettings
+│   ├── llm_client.py      # ExternalLLMClient
+│   └── tracing.py         # OpenTelemetry initialization and utilities
 └── openai/
     ├── notebook_cache.py  # NotebookCache, NotebookInfo, SourceInfo
     ├── router.py          # SmartRouter, RequestType, RoutingDecision
@@ -707,3 +708,76 @@ src/nlm_proxy/
         ├── classify_request.txt
         └── select_notebook.txt  # Updated with source-aware selection
 ```
+
+## OpenTelemetry Tracing
+
+The smart router is fully instrumented with OpenTelemetry for observability and debugging.
+
+### Span Hierarchy
+
+Each routing request creates a trace with nested spans:
+
+```
+smart_router.route (parent span)
+├── user_query: "What does the Attention paper say?"
+├── request_type: "NOTEBOOKLM"
+├── notebook_id: "abc-123"
+│
+├── smart_router.classify (child span)
+│   ├── classification_result: "NOTEBOOKLM"
+│   └── llm_model: "gpt-4o-mini"
+│
+└── smart_router.select_notebook (child span)
+    ├── candidates_count: 3
+    ├── selected_notebook_id: "abc-123"
+    └── selected_notebook_title: "ML Research"
+```
+
+### Enabling Tracing
+
+```bash
+# Environment variables
+export NLM_PROXY_OTEL_ENABLED=true
+export NLM_PROXY_OTEL_ENDPOINT=http://localhost:4317
+export NLM_PROXY_OTEL_SERVICE_NAME=nlm-proxy
+
+# Start tracing infrastructure
+docker compose -f docker-compose.otel.yml up -d
+
+# Start proxy with tracing
+nlm-proxy serve openai --port 8080
+```
+
+### Tracing Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `NLM_PROXY_OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing |
+| `NLM_PROXY_OTEL_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint (gRPC) |
+| `NLM_PROXY_OTEL_SERVICE_NAME` | `nlm-proxy` | Service name in traces |
+
+### Querying Traces
+
+With ClickHouse storage, you can analyze routing patterns:
+
+```sql
+-- Average routing time by request type
+SELECT
+    SpanAttributes['request_type'] as request_type,
+    count() as count,
+    avg(Duration)/1000000 as avg_duration_ms
+FROM nlm_traces.routing_traces
+WHERE SpanName = 'smart_router.route'
+GROUP BY request_type;
+
+-- Most selected notebooks
+SELECT
+    SpanAttributes['selected_notebook_title'] as notebook,
+    count() as selections
+FROM nlm_traces.routing_traces
+WHERE SpanName = 'smart_router.select_notebook'
+GROUP BY notebook
+ORDER BY selections DESC;
+```
+
+See [Tracing Guide](TRACING.md) for complete setup and query examples.

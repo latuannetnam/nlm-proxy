@@ -159,6 +159,27 @@ class SmartRoutingSettings(BaseSettings):
     )
 
 
+class TracingSettings(BaseSettings):
+    """OpenTelemetry tracing configuration."""
+
+    enabled: bool = Field(default=False, description="Enable OpenTelemetry tracing")
+    endpoint: str = Field(
+        default="http://localhost:4317",
+        description="OTLP collector endpoint (gRPC)"
+    )
+    service_name: str = Field(
+        default="nlm-proxy",
+        description="Service name in traces"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="NLM_PROXY_OTEL_",
+        env_file=_get_env_files(),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 # Singleton instances
 _shared: SharedSettings | None = None
 _logging: LoggingSettings | None = None
@@ -166,6 +187,7 @@ _mcp: MCPSettings | None = None
 _openai: OpenAISettings | None = None
 _auth: AuthSettings | None = None
 _routing: SmartRoutingSettings | None = None
+_tracing: TracingSettings | None = None
 
 
 def get_shared_settings() -> SharedSettings:
@@ -214,6 +236,14 @@ def get_routing_settings() -> SmartRoutingSettings:
     if _routing is None:
         _routing = SmartRoutingSettings()
     return _routing
+
+
+def get_tracing_settings() -> TracingSettings:
+    """Get the tracing settings instance."""
+    global _tracing
+    if _tracing is None:
+        _tracing = TracingSettings()
+    return _tracing
 
 
 # Keep backward compatibility aliases

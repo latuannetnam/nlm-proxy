@@ -40,8 +40,15 @@ openai = [
     "uvicorn>=0.23.0",
     "openai>=1.0.0",
 ]
+otel = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+    "opentelemetry-instrumentation-fastapi>=0.41b0",
+    "opentelemetry-instrumentation-httpx>=0.41b0",
+]
 all = [
-    "nlm-proxy[mcp,openai]",
+    "nlm-proxy[mcp,openai,otel]",
 ]
 dev = [
     "pytest>=8.0.0",

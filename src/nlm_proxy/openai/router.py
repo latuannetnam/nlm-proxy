@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from nlm_proxy.core.logging import get_logger
 from nlm_proxy.core.llm_client import ExternalLLMClient
+from nlm_proxy.core.tracing import record_span, add_span_attributes
 from nlm_proxy.openai.notebook_cache import NotebookCache
 from nlm_proxy.openai.prompts import load_prompt
 
@@ -72,6 +73,7 @@ class SmartRouter:
         logger.warning("[ROUTER] Cache unexpectedly empty - notebooks may not be available")
         return []
 
+    @record_span("smart_router.classify")
     async def classify_request(self, query: str) -> RequestType:
         """Classify the request type using external LLM."""
         logger.debug(f"[ROUTER] Classifying request: {query[:100]}...")
@@ -83,10 +85,19 @@ class SmartRouter:
 
         if "notebooklm" in response_lower:
             logger.info(f"[ROUTER] Classified as NOTEBOOKLM query")
+            add_span_attributes(
+                classification_result="NOTEBOOKLM",
+                llm_model=self.llm_client.model
+            )
             return RequestType.NOTEBOOKLM
         logger.info(f"[ROUTER] Classified as LLM_TASK")
+        add_span_attributes(
+            classification_result="LLM_TASK",
+            llm_model=self.llm_client.model
+        )
         return RequestType.LLM_TASK
 
+    @record_span("smart_router.select_notebook")
     async def select_notebook(self, query: str) -> tuple[str | None, str]:
         """Select best notebook for query. Returns (notebook_id, reasoning)."""
         logger.debug(f"[ROUTER] Selecting notebook for query: {query[:100]}...")
@@ -94,7 +105,10 @@ class SmartRouter:
 
         if not notebooks:
             logger.warning("[ROUTER] No notebooks available for selection")
+            add_span_attributes(candidates_count=0)
             return None, "No notebooks available"
+
+        add_span_attributes(candidates_count=len(notebooks))
 
         # Get max source titles from env or use default
         max_source_titles = int(
@@ -129,23 +143,39 @@ class SmartRouter:
             if nb.id in response:
                 reasoning = f"Selected notebook: {nb.title} (ID: {nb.id})"
                 logger.info(f"[ROUTER] {reasoning}")
+                add_span_attributes(
+                    selected_notebook_id=nb.id,
+                    selected_notebook_title=nb.title
+                )
                 return nb.id, reasoning
 
         # Fallback to first notebook
         if notebooks:
             reasoning = f"Defaulted to notebook: {notebooks[0].title} (ID: {notebooks[0].id})"
             logger.info(f"[ROUTER] {reasoning}")
+            add_span_attributes(
+                selected_notebook_id=notebooks[0].id,
+                selected_notebook_title=notebooks[0].title,
+                selection_fallback=True
+            )
             return notebooks[0].id, reasoning
 
         return None, "No suitable notebook found"
 
+    @record_span("smart_router.route")
     async def route(self, query: str) -> RoutingDecision:
         """Classify and route the request."""
         logger.info(f"[ROUTER] Starting routing for query: {query[:50]}...")
+        add_span_attributes(user_query=query[:500])  # Truncate for storage
+
         request_type = await self.classify_request(query)
 
         if request_type == RequestType.LLM_TASK:
             logger.info("[ROUTER] Routing to external LLM")
+            add_span_attributes(
+                request_type="LLM_TASK",
+                notebook_id=None
+            )
             return RoutingDecision(
                 request_type=RequestType.LLM_TASK,
                 reasoning="Classified as LLM task (not a notebook query)"
@@ -153,6 +183,11 @@ class SmartRouter:
 
         notebook_id, reasoning = await self.select_notebook(query)
         logger.info(f"[ROUTER] Routing to NotebookLM: {notebook_id}")
+        add_span_attributes(
+            request_type="NOTEBOOKLM",
+            notebook_id=notebook_id,
+            routing_reasoning=reasoning
+        )
         return RoutingDecision(
             request_type=RequestType.NOTEBOOKLM,
             notebook_id=notebook_id,

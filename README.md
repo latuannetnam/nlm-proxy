@@ -45,6 +45,32 @@ Automatically route requests to the best backend using AI-powered classification
 | **LLM Passthrough** | General tasks routed to external LLM (e.g., GPT-4o-mini) |
 | **Cached Summaries** | Notebook and source info cached with configurable TTL |
 
+### OpenTelemetry Tracing
+Monitor and analyze routing decisions with distributed tracing:
+
+| Feature | Description |
+|---------|-------------|
+| **Request Tracing** | Full visibility into routing decisions and timing |
+| **Span Hierarchy** | Parent-child spans for route → classify → select_notebook |
+| **Rich Attributes** | Query text, classification results, notebook selection |
+| **Auto-Instrumentation** | FastAPI and httpx automatically traced |
+| **ClickHouse Storage** | 90-day retention with efficient querying |
+
+**Quick Start:**
+```bash
+# Start the tracing infrastructure
+docker compose -f docker-compose.otel.yml up -d
+
+# Enable tracing
+export NLM_PROXY_OTEL_ENABLED=true
+export NLM_PROXY_OTEL_ENDPOINT=http://localhost:4317
+
+# Start the proxy
+nlm-proxy serve openai --port 8080
+```
+
+See [Tracing Guide](docs/TRACING.md) for setup, querying, and troubleshooting.
+
 **Configuration:**
 ```bash
 # Add to ~/.nlm-proxy/.env
