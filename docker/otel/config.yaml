@@ -15,8 +15,7 @@ exporters:
   clickhouse:
     endpoint: tcp://clickhouse:9000
     database: nlm_traces
-    traces_table_name: routing_traces
-    ttl_days: 90
+    traces_table_name: otel_traces
     timeout: 5s
     retry_on_failure:
       enabled: true
@@ -24,12 +23,12 @@ exporters:
       max_interval: 30s
       max_elapsed_time: 300s
 
-  logging:
-    loglevel: info
+  debug:
+    verbosity: detailed
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [clickhouse, logging]
+      exporters: [clickhouse, debug]

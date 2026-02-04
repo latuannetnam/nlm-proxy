@@ -86,12 +86,15 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 ### 5. View Traces
 
 ```bash
+docker exec -it nlm-clickhouse /bin/bash
 docker exec -it nlm-clickhouse clickhouse-client --query \
   "SELECT SpanName, Duration/1000000 as duration_ms
-   FROM nlm_traces.routing_traces
+   FROM nlm_traces.otel_traces
    ORDER BY Timestamp DESC
-   LIMIT 10"
+   LIMIT 10 FORMAT Pretty"
 ```
+
+**Note:** The ClickHouse exporter automatically creates the `otel_traces` table with an optimized schema for OpenTelemetry data.
 
 ## Configuration
 
@@ -245,6 +248,76 @@ Connect to ClickHouse:
 docker exec -it nlm-clickhouse clickhouse-client
 ```
 
+#### End-to-End Request Flow
+
+View the complete flow for a single request, showing all spans from HTTP request through routing to response:
+
+```sql
+-- Complete request flow grouped by TraceId
+SELECT
+    TraceId,
+    formatDateTime(Timestamp, '%Y-%m-%d %H:%M:%S') as time,
+    SpanName,
+    round(Duration/1000000, 2) as duration_ms,
+    SpanAttributes['user_query'] as query,
+    SpanAttributes['classification_result'] as classification,
+    SpanAttributes['selected_notebook_title'] as selected_notebook,
+    SpanAttributes['candidates_count'] as candidates,
+    StatusCode as status
+FROM nlm_traces.otel_traces
+WHERE TraceId IN (
+    SELECT DISTINCT TraceId
+    FROM nlm_traces.otel_traces
+    WHERE SpanName = 'smart_router.route'
+    ORDER BY Timestamp DESC
+    LIMIT 1
+)
+ORDER BY Timestamp
+FORMAT Pretty;
+```
+
+**Example Output:**
+```
+┌─TraceId──────────────────────────┬─time─────────────────┬─SpanName────────────────────────┬─duration_ms─┬─query─────────────────────┬─classification─┬─selected_notebook─┬─candidates─┬─status─┐
+│ 6e0b1e50c2c8d6a4d1f4b74767284148 │ 2026-02-04 04:25:21  │ POST /v1/chat/completions       │    51018.59 │                           │                │                   │            │ Unset  │
+│ 6e0b1e50c2c8d6a4d1f4b74767284148 │ 2026-02-04 04:25:21  │ smart_router.classify           │     3766.18 │                           │ NOTEBOOKLM     │                   │            │ Ok     │
+│ 6e0b1e50c2c8d6a4d1f4b74767284148 │ 2026-02-04 04:25:21  │ smart_router.route              │     4699.97 │ What is machine learning? │                │                   │            │ Ok     │
+│ 6e0b1e50c2c8d6a4d1f4b74767284148 │ 2026-02-04 04:25:24  │ smart_router.select_notebook    │      933.79 │                           │                │ ML Research       │ 4          │ Ok     │
+│ 6e0b1e50c2c8d6a4d1f4b74767284148 │ 2026-02-04 04:26:12  │ POST /v1/chat/completions send  │           0 │                           │                │                   │            │ Unset  │
+└──────────────────────────────────┴──────────────────────┴─────────────────────────────────┴─────────────┴───────────────────────────┴────────────────┴───────────────────┴────────────┴────────┘
+```
+
+This shows the complete request lifecycle:
+1. **POST /v1/chat/completions** - HTTP request received (51 seconds total)
+2. **smart_router.classify** - LLM classification (3.8 seconds) → Result: NOTEBOOKLM
+3. **smart_router.route** - Main routing logic (4.7 seconds)
+4. **smart_router.select_notebook** - Notebook selection (0.9 seconds) → Selected: ML Research (4 candidates)
+5. **POST /v1/chat/completions send** - HTTP response sent
+
+#### Recent Requests Summary
+
+View a summary of recent requests showing key routing decisions:
+
+```sql
+-- Summary view of recent requests
+SELECT
+    substring(TraceId, 1, 8) as trace,
+    formatDateTime(min(Timestamp), '%H:%M:%S') as time,
+    any(SpanAttributes['user_query']) as user_query,
+    any(SpanAttributes['classification_result']) as classification,
+    any(SpanAttributes['selected_notebook_title']) as notebook,
+    round(sum(Duration)/1000000, 2) as total_ms
+FROM nlm_traces.otel_traces
+WHERE SpanName LIKE 'smart_router%'
+  AND Timestamp > now() - INTERVAL 1 HOUR
+GROUP BY TraceId
+ORDER BY min(Timestamp) DESC
+LIMIT 10
+FORMAT Pretty;
+```
+
+This provides a high-level overview of routing activity with one row per request.
+
 #### Recent Traces
 ```sql
 SELECT
@@ -253,7 +326,7 @@ SELECT
     Duration/1000000 as duration_ms,
     SpanAttributes['request_type'] as request_type,
     SpanAttributes['notebook_id'] as notebook_id
-FROM nlm_traces.routing_traces
+FROM nlm_traces.otel_traces
 WHERE SpanName = 'smart_router.route'
 ORDER BY Timestamp DESC
 LIMIT 20;
@@ -266,7 +339,7 @@ SELECT
     count() as count,
     avg(Duration)/1000000 as avg_duration_ms,
     quantile(0.95)(Duration)/1000000 as p95_duration_ms
-FROM nlm_traces.routing_traces
+FROM nlm_traces.otel_traces
 WHERE SpanName = 'smart_router.route'
   AND Timestamp > now() - INTERVAL 1 HOUR
 GROUP BY request_type;
@@ -278,7 +351,7 @@ SELECT
     SpanAttributes['selected_notebook_id'] as notebook_id,
     SpanAttributes['selected_notebook_title'] as notebook_title,
     count() as selection_count
-FROM nlm_traces.routing_traces
+FROM nlm_traces.otel_traces
 WHERE SpanName = 'smart_router.select_notebook'
   AND Timestamp > now() - INTERVAL 24 HOUR
 GROUP BY notebook_id, notebook_title
@@ -292,7 +365,7 @@ SELECT
     countIf(SpanAttributes['selection_fallback'] = 'true') as fallback_count,
     count() as total_count,
     fallback_count / total_count * 100 as fallback_rate_pct
-FROM nlm_traces.routing_traces
+FROM nlm_traces.otel_traces
 WHERE SpanName = 'smart_router.select_notebook'
   AND Timestamp > now() - INTERVAL 24 HOUR;
 ```
@@ -304,7 +377,7 @@ SELECT
     countIf(StatusCode = 'ERROR') as error_count,
     count() as total_count,
     error_count / total_count * 100 as error_rate_pct
-FROM nlm_traces.routing_traces
+FROM nlm_traces.otel_traces
 WHERE Timestamp > now() - INTERVAL 1 HOUR
 GROUP BY SpanName;
 ```
@@ -316,7 +389,7 @@ SELECT
     Duration/1000000 as duration_ms,
     SpanAttributes,
     StatusCode
-FROM nlm_traces.routing_traces
+FROM nlm_traces.otel_traces
 WHERE TraceId = 'your-trace-id-here'
 ORDER BY Timestamp;
 ```
