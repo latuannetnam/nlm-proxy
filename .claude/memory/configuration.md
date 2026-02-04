@@ -15,6 +15,7 @@ Unified configuration using pydantic-settings with precedence:
 | `AuthSettings` | `NLM_PROXY_AUTH_` | Authentication settings |
 | `LoggingSettings` | `NLM_PROXY_LOG_` | Logging settings |
 | `SmartRoutingSettings` | `NLM_PROXY_ROUTING_` | Smart routing and source fetching |
+| `TracingSettings` | `NLM_PROXY_OTEL_` | OpenTelemetry tracing settings |
 
 ## Environment Variables
 
@@ -49,6 +50,13 @@ NLM_PROXY_ROUTING_ALLOWED_NOTEBOOKS=  # comma-separated notebook IDs
 NLM_PROXY_ROUTING_SUMMARY_CACHE_TTL=3600
 NLM_PROXY_ROUTING_SOURCE_FETCH_CONCURRENCY=10  # max parallel source fetches
 NLM_PROXY_ROUTING_MAX_SOURCE_TITLES=15  # max source titles in selection prompt
+
+# OpenTelemetry Tracing
+NLM_PROXY_OTEL_ENABLED=false
+NLM_PROXY_OTEL_ENDPOINT=http://localhost:4317
+NLM_PROXY_OTEL_SERVICE_NAME=nlm-proxy
+NLM_PROXY_OTEL_REQUEST_MAX_LENGTH=500  # max chars of user query (0=disable)
+NLM_PROXY_OTEL_RESPONSE_MAX_LENGTH=1000  # max chars of response (0=disable)
 ```
 
 ## .env File Locations

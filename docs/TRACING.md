@@ -559,6 +559,50 @@ export NLM_PROXY_OTEL_ENABLED=false
 
 Or remove the environment variables entirely. The proxy will start without tracing overhead.
 
+## Implementation Notes
+
+### Streaming vs Non-Streaming Span Ownership
+
+A critical architectural decision for response tracing: **streaming and non-streaming requests require different span ownership patterns**.
+
+**Problem:** When returning a `StreamingResponse`, the parent function's `with` block exits immediately, closing the span before the generator runs. This means you cannot create a span in the parent and expect it to capture streaming response data.
+
+```python
+# WRONG - span closes before streaming starts
+async def handle_request(...):
+    with tracer.start_as_current_span("my_span") as span:
+        return StreamingResponse(my_generator(..., span))
+        # <-- span closes HERE, before generator runs!
+```
+
+**Solution:** Separate span ownership based on request type:
+
+- **Streaming requests**: The generator function creates and owns the span
+- **Non-streaming requests**: The parent function creates and owns the span
+
+```python
+# CORRECT - generator owns its span for streaming
+async def stream_response(...):
+    with tracer.start_as_current_span("handle_request") as span:
+        async for chunk in ...:
+            accumulated += chunk
+            yield chunk
+        span.set_attribute("response", accumulated)
+
+async def handle_request(...):
+    if request.stream:
+        # NO span here - generator owns it
+        return StreamingResponse(stream_response(...))
+
+    # Non-streaming: create span here
+    with tracer.start_as_current_span("handle_request") as span:
+        response = await get_response()
+        span.set_attribute("response", response)
+        return response
+```
+
+**Why this matters:** Creating duplicate spans with the same name in a trace causes `argMax()` aggregation queries (used in Grafana dashboards) to return non-deterministic results—data appears and disappears on refresh.
+
 ## Best Practices
 
 1. **Use sampling in production**: For high-traffic deployments, configure sampling in the collector to reduce data volume.
