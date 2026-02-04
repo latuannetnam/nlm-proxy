@@ -16,8 +16,16 @@ def test_opentelemetry_imports():
     assert OTLPSpanExporter is not None
 
 
-def test_tracing_settings_defaults():
+def test_tracing_settings_defaults(monkeypatch, tmp_path):
     """Test TracingSettings has correct defaults."""
+    # Clear any environment variables that might override defaults
+    monkeypatch.delenv("NLM_PROXY_OTEL_ENABLED", raising=False)
+    monkeypatch.delenv("NLM_PROXY_OTEL_ENDPOINT", raising=False)
+    monkeypatch.delenv("NLM_PROXY_OTEL_SERVICE_NAME", raising=False)
+
+    # Change to temp directory to avoid reading .env files
+    monkeypatch.chdir(tmp_path)
+
     from nlm_proxy.core.config import TracingSettings
 
     settings = TracingSettings()
