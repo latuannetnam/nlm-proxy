@@ -51,10 +51,12 @@ Monitor and analyze routing decisions with distributed tracing:
 | Feature | Description |
 |---------|-------------|
 | **Request Tracing** | Full visibility into routing decisions and timing |
-| **Span Hierarchy** | Parent-child spans for route → classify → select_notebook |
-| **Rich Attributes** | Query text, classification results, notebook selection |
+| **Response Capture** | User queries and LLM/NotebookLM responses stored in traces |
+| **Span Hierarchy** | Parent-child spans: handle_request → route → classify → select_notebook |
+| **Rich Attributes** | Query text, response content, classification results, notebook selection |
 | **Auto-Instrumentation** | FastAPI and httpx automatically traced |
 | **ClickHouse Storage** | 90-day retention with efficient querying |
+| **Grafana Dashboard** | Pre-built analytics dashboard with response previews |
 
 **Quick Start:**
 ```bash

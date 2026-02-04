@@ -718,19 +718,23 @@ The smart router is fully instrumented with OpenTelemetry for observability and 
 Each routing request creates a trace with nested spans:
 
 ```
-smart_router.route (parent span)
+smart_router.handle_request (parent span - full request lifecycle)
 ├── user_query: "What does the Attention paper say?"
-├── request_type: "NOTEBOOKLM"
-├── notebook_id: "abc-123"
+├── response_content: "The Transformer architecture..." (truncated)
+├── response_source: "notebooklm" or "llm"
 │
-├── smart_router.classify (child span)
-│   ├── classification_result: "NOTEBOOKLM"
-│   └── llm_model: "gpt-4o-mini"
-│
-└── smart_router.select_notebook (child span)
-    ├── candidates_count: 3
-    ├── selected_notebook_id: "abc-123"
-    └── selected_notebook_title: "ML Research"
+└── smart_router.route (child span - routing decision)
+    ├── request_type: "NOTEBOOKLM"
+    ├── notebook_id: "abc-123"
+    │
+    ├── smart_router.classify (grandchild span)
+    │   ├── classification_result: "NOTEBOOKLM"
+    │   └── llm_model: "gpt-4o-mini"
+    │
+    └── smart_router.select_notebook (grandchild span)
+        ├── candidates_count: 3
+        ├── selected_notebook_id: "abc-123"
+        └── selected_notebook_title: "ML Research"
 ```
 
 ### Enabling Tracing
@@ -755,6 +759,8 @@ nlm-proxy serve openai --port 8080
 | `NLM_PROXY_OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing |
 | `NLM_PROXY_OTEL_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint (gRPC) |
 | `NLM_PROXY_OTEL_SERVICE_NAME` | `nlm-proxy` | Service name in traces |
+| `NLM_PROXY_OTEL_REQUEST_MAX_LENGTH` | `500` | Max chars of user query to store (0 to disable) |
+| `NLM_PROXY_OTEL_RESPONSE_MAX_LENGTH` | `1000` | Max chars of response to store (0 to disable) |
 
 ### Querying Traces
 

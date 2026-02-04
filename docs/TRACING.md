@@ -20,6 +20,7 @@ The tracing feature instruments the Smart Router to capture:
 - **Notebook selection**: Which notebook was chosen and why
 - **Timing data**: How long each operation takes
 - **Request attributes**: Query text, notebook IDs, and routing decisions
+- **Response content**: LLM and NotebookLM responses (truncated, configurable)
 
 ### Architecture
 
@@ -405,6 +406,22 @@ SELECT
 FROM nlm_traces.otel_traces
 WHERE TraceId = 'your-trace-id-here'
 ORDER BY Timestamp;
+```
+
+#### Response Content Analysis
+```sql
+-- View recent requests with their responses
+SELECT
+    formatDateTime(Timestamp, '%Y-%m-%d %H:%i:%S') as time,
+    substring(SpanAttributes['user_query'], 1, 50) as query,
+    SpanAttributes['response_source'] as source,
+    substring(SpanAttributes['response_content'], 1, 100) as response_preview,
+    round(Duration/1000000, 2) as duration_ms
+FROM nlm_traces.otel_traces
+WHERE SpanName = 'smart_router.handle_request'
+  AND Timestamp > now() - INTERVAL 1 HOUR
+ORDER BY Timestamp DESC
+LIMIT 20;
 ```
 
 ### Grafana Integration
