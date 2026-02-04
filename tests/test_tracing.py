@@ -126,3 +126,63 @@ async def test_full_tracing_flow(monkeypatch):
 
     # Shutdown should not raise
     shutdown_tracing()
+
+
+def test_tracing_settings_request_max_length_default():
+    """Test TracingSettings has correct default for request_max_length."""
+    from nlm_proxy.core.config import TracingSettings
+
+    settings = TracingSettings()
+
+    assert settings.request_max_length == 500
+
+
+def test_tracing_settings_request_max_length_from_env(monkeypatch):
+    """Test request_max_length reads from environment."""
+    monkeypatch.setenv("NLM_PROXY_OTEL_REQUEST_MAX_LENGTH", "1000")
+
+    # Clear singleton cache
+    import nlm_proxy.core.config as config_module
+    config_module._tracing = None
+
+    from nlm_proxy.core.config import get_tracing_settings
+    settings = get_tracing_settings()
+
+    assert settings.request_max_length == 1000
+
+
+def test_tracing_settings_response_max_length_default():
+    """Test TracingSettings has correct default for response_max_length."""
+    from nlm_proxy.core.config import TracingSettings
+
+    settings = TracingSettings()
+
+    assert settings.response_max_length == 1000
+
+
+def test_tracing_settings_response_max_length_from_env(monkeypatch):
+    """Test response_max_length reads from environment."""
+    monkeypatch.setenv("NLM_PROXY_OTEL_RESPONSE_MAX_LENGTH", "5000")
+
+    # Clear singleton cache
+    import nlm_proxy.core.config as config_module
+    config_module._tracing = None
+
+    from nlm_proxy.core.config import get_tracing_settings
+    settings = get_tracing_settings()
+
+    assert settings.response_max_length == 5000
+
+
+def test_tracing_settings_response_max_length_disabled(monkeypatch):
+    """Test response_max_length can be set to 0 to disable."""
+    monkeypatch.setenv("NLM_PROXY_OTEL_RESPONSE_MAX_LENGTH", "0")
+
+    # Clear singleton cache
+    import nlm_proxy.core.config as config_module
+    config_module._tracing = None
+
+    from nlm_proxy.core.config import get_tracing_settings
+    settings = get_tracing_settings()
+
+    assert settings.response_max_length == 0

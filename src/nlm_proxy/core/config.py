@@ -171,6 +171,14 @@ class TracingSettings(BaseSettings):
         default="nlm-proxy",
         description="Service name in traces"
     )
+    request_max_length: int = Field(
+        default=500,
+        description="Max chars of user query to store in trace (0 to disable)"
+    )
+    response_max_length: int = Field(
+        default=1000,
+        description="Max chars of response to store in trace (0 to disable)"
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="NLM_PROXY_OTEL_",
