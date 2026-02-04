@@ -31,5 +31,21 @@ services:
       clickhouse:
         condition: service_healthy
 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nlm-grafana
+    ports:
+      - "3000:3000"  # Grafana UI
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
 volumes:
   clickhouse_data:
+  grafana_data:

@@ -273,7 +273,7 @@ WHERE TraceId IN (
     LIMIT 1
 )
 ORDER BY Timestamp
-FORMAT Pretty;
+FORMAT PrettyCompact;
 ```
 
 **Example Output:**
@@ -396,11 +396,46 @@ ORDER BY Timestamp;
 
 ### Grafana Integration
 
-To visualize traces in Grafana:
+#### Accessing Grafana
 
-1. Add ClickHouse as a data source
-2. Create dashboards with the queries above
-3. Set up alerts for error rates or slow responses
+After starting the tracing stack, Grafana is available at:
+```
+http://localhost:3000
+```
+
+**Default credentials:**
+- Username: `admin`
+- Password: `admin` (change on first login)
+
+#### Pre-configured Dashboard
+
+Navigate to: **Dashboards > NLM Proxy - Routing Analytics**
+
+This dashboard provides:
+- **Real-time metrics**: Request volume, average routing time, error rate, P95 latency
+- **Classification analytics**: Distribution of NOTEBOOKLM vs LLM_TASK requests
+- **Notebook insights**: Most frequently selected notebooks
+- **Recent requests**: Detailed table with drill-down to traces
+
+#### Trace Exploration
+
+1. From the "Recent Requests" table, click any **TraceId**
+2. This opens the **Explore** tab with a pre-configured query
+3. View the complete span hierarchy showing the request flow:
+   - HTTP request → smart_router.route → classify → select_notebook
+
+You can also manually explore traces:
+
+1. Navigate to **Explore** tab
+2. Select **ClickHouse (nlm_traces)** data source
+3. Query to view trace details:
+   ```sql
+   SELECT * FROM nlm_traces.otel_traces
+   WHERE TraceId = 'your-trace-id-here'
+   ORDER BY Timestamp
+   ```
+
+This shows all spans in the trace with their attributes, timing, and relationships.
 
 ## Troubleshooting
 
