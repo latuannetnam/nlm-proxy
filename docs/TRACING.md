@@ -105,6 +105,8 @@ docker exec -it nlm-clickhouse clickhouse-client --query \
 | `NLM_PROXY_OTEL_ENABLED` | `false` | Enable/disable tracing |
 | `NLM_PROXY_OTEL_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint (gRPC) |
 | `NLM_PROXY_OTEL_SERVICE_NAME` | `nlm-proxy` | Service name in traces |
+| `NLM_PROXY_OTEL_REQUEST_MAX_LENGTH` | `500` | Max chars of user query to store in trace (0 to disable) |
+| `NLM_PROXY_OTEL_RESPONSE_MAX_LENGTH` | `1000` | Max chars of response to store in trace (0 to disable) |
 
 ### Configuration File
 
@@ -203,17 +205,28 @@ Update the collector config to export to your chosen backend.
 Each request creates a trace with nested spans:
 
 ```
-smart_router.route (parent)
-├── smart_router.classify (child)
-└── smart_router.select_notebook (child, if NotebookLM)
+smart_router.handle_request (parent - full request lifecycle)
+├── user_query
+├── response_content
+├── response_source
+│
+└── smart_router.route (child - routing decision)
+    ├── smart_router.classify (grandchild)
+    └── smart_router.select_notebook (grandchild, if NotebookLM)
 ```
 
 ### Span Attributes
 
+#### smart_router.handle_request
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `user_query` | string | User's query (truncated per `REQUEST_MAX_LENGTH`) |
+| `response_content` | string | Response text (truncated per `RESPONSE_MAX_LENGTH`) |
+| `response_source` | string | "llm" or "notebooklm" |
+
 #### smart_router.route
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `user_query` | string | User's query (truncated to 500 chars) |
 | `request_type` | string | "LLM_TASK" or "NOTEBOOKLM" |
 | `notebook_id` | string | Selected notebook ID (if applicable) |
 | `routing_reasoning` | string | Explanation of routing decision |
