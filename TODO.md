@@ -2,7 +2,8 @@
 - ~~1. Configuration settings via env variable and command line argument~~
 - ~~5. OpenAI endpoint authentication~~
 - ~~3. Smart router: LLM question routing~~
-- [] Track notebook query -> NotebookLM query analysis: question, answer, notebook, quality etc...
+- [Doing] Track notebook query -> NotebookLM query analysis: question, answer, notebook, quality etc...
+- [] Enhance NotebookLM selection using metadata: source title + source description
 - [] Switch to Agent library for more complex task
 - [] Use LLM task to pre-process in individual notebook model
 - [ ] Multiple authentication profiles
