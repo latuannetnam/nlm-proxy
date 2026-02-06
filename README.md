@@ -4,6 +4,24 @@
 
 > This project is a fork of [notebooklm-mcp](https://github.com/jacob-bd/notebooklm-mcp) with significant enhancements, including an OpenAI-compatible API proxy and modular architecture.
 
+## Table of Contents
+
+- [Key Features](#key-features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [OpenAI Proxy Usage](#openai-proxy-usage)
+- [API Endpoints](#api-endpoints-openai-proxy)
+- [CLI Reference](#cli-reference)
+- [Configuration](#configuration)
+- [Tracing Infrastructure](#tracing-infrastructure)
+- [Architecture](#architecture)
+- [MCP Tools](#mcp-tools)
+- [Development](#development)
+- [Disclaimer](#disclaimer)
+- [Limitations](#limitations)
+- [Credits](#credits)
+- [License](#license)
+
 ## Key Features
 
 ### Core Library
@@ -58,20 +76,9 @@ Monitor and analyze routing decisions with distributed tracing:
 | **ClickHouse Storage** | 90-day retention with efficient querying |
 | **Grafana Dashboard** | Pre-built analytics dashboard with response previews |
 
-**Quick Start:**
-```bash
-# Start the tracing infrastructure
-docker compose -f docker-compose.otel.yml up -d
+See [Tracing Infrastructure](#tracing-infrastructure) below for installation instructions (Docker and Native Ubuntu).
 
-# Enable tracing
-export NLM_PROXY_OTEL_ENABLED=true
-export NLM_PROXY_OTEL_ENDPOINT=http://localhost:4317
-
-# Start the proxy
-nlm-proxy serve openai --port 8080
-```
-
-See [Tracing Guide](docs/TRACING.md) for setup, querying, and troubleshooting.
+For advanced configuration, querying, and troubleshooting, see the [Tracing Guide](docs/TRACING.md).
 
 **Configuration:**
 ```bash
@@ -411,6 +418,91 @@ nlm-proxy serve mcp
 ```
 
 See `.env.example` in the project root for all available options.
+
+## Tracing Infrastructure
+
+NLM Proxy uses **OpenTelemetry**, **ClickHouse**, and **Grafana** for comprehensive request tracing.
+
+### 1. Docker Setup (Recommended)
+
+The easiest way to get started is using the provided Docker Compose configuration.
+
+```bash
+# Start the infrastructure
+docker compose -f docker-compose.otel.yml up -d
+
+# Enable tracing and start proxy
+export NLM_PROXY_OTEL_ENABLED=true
+nlm-proxy serve openai --port 8080
+```
+
+Access Grafana at `http://localhost:3000` (default login: `admin` / `admin`).
+
+### 2. Native Ubuntu 24.04 Setup
+
+For environments where Docker is not available, you can install the components natively.
+
+**Step 1: Install ClickHouse**
+```bash
+# Install dependencies
+sudo apt-get install -y apt-transport-https ca-certificates curl gnupg
+
+# Add GPG key and repository (safe for Ubuntu 24.04)
+curl -fsSL 'https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key' | sudo gpg --dearmor -o /usr/share/keyrings/clickhouse-keyring.gpg
+ARCH=$(dpkg --print-architecture)
+echo "deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg arch=${ARCH}] https://packages.clickhouse.com/deb stable main" | sudo tee /etc/apt/sources.list.d/clickhouse.list
+
+# Install and start
+sudo apt-get update
+sudo apt-get install -y clickhouse-server clickhouse-client
+sudo systemctl enable clickhouse-server
+sudo systemctl start clickhouse-server
+
+# Initialize database
+clickhouse-client < docker/clickhouse/init.sql
+```
+
+**Step 2: Install OpenTelemetry Collector**
+```bash
+# Download Contrib release (required for ClickHouse exporter)
+# Check https://github.com/open-telemetry/opentelemetry-collector-releases/releases for latest
+wget https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.120.0/otelcol-contrib_0.120.0_linux_amd64.deb
+sudo dpkg -i otelcol-contrib_0.120.0_linux_amd64.deb
+
+# Configure
+sudo cp docker/otel/config.yaml /etc/otelcol-contrib/config.yaml
+# Point to localhost instead of docker hostname
+sudo sed -i 's/clickhouse:9000/127.0.0.1:9000/g' /etc/otelcol-contrib/config.yaml
+
+sudo systemctl restart otelcol-contrib
+```
+
+**Step 3: Install Grafana**
+```bash
+# Install dependencies
+sudo apt-get install -y apt-transport-https software-properties-common wget
+
+# Add GPG key and repository
+sudo mkdir -p /etc/apt/keyrings/
+wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+
+# Install Grafana
+sudo apt-get update
+sudo apt-get install grafana
+
+# Install ClickHouse Plugin
+sudo grafana-cli plugins install grafana-clickhouse-datasource
+
+# Configure Provisioning
+sudo cp -r docker/grafana/provisioning/* /etc/grafana/provisioning/
+# Point to localhost instead of docker hostname
+sudo sed -i 's/host: clickhouse/host: 127.0.0.1/g' /etc/grafana/provisioning/datasources/clickhouse.yml
+
+# Start service
+sudo systemctl enable grafana-server
+sudo systemctl start grafana-server
+```
 
 ## Architecture
 
