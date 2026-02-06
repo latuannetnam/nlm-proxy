@@ -661,8 +661,8 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     try:
         uvicorn.run(app, host=host, port=port)
     finally:
-        # Shutdown tracing first to flush pending spans
-        shutdown_tracing()
+        # Shutdown tracing with timeout to prevent hanging on exit
+        shutdown_tracing(timeout_seconds=3)
         # Cleanup notebook cache on shutdown
         if app.state.notebook_cache:
             app.state.notebook_cache.shutdown()

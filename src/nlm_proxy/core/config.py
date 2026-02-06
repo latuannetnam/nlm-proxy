@@ -171,6 +171,14 @@ class TracingSettings(BaseSettings):
         default="nlm-proxy",
         description="Service name in traces"
     )
+    export_timeout: int = Field(
+        default=2,
+        description="Export timeout in seconds (default: 2s for fast failure)"
+    )
+    max_queue_size: int = Field(
+        default=2048,
+        description="Max span queue size (default: 2048, drops oldest when full)"
+    )
     request_max_length: int = Field(
         default=500,
         description="Max chars of user query to store in trace (0 to disable)"

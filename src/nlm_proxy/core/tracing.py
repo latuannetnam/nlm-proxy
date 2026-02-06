@@ -43,20 +43,38 @@ def init_tracing() -> None:
         # Create and configure tracer provider
         provider = TracerProvider(resource=resource)
 
-        # Configure OTLP exporter
-        exporter = OTLPSpanExporter(endpoint=settings.endpoint, insecure=True)
-        processor = BatchSpanProcessor(exporter)
+        # Configure OTLP exporter with fast timeout to prevent blocking
+        exporter = OTLPSpanExporter(
+            endpoint=settings.endpoint,
+            insecure=True,
+            timeout=settings.export_timeout  # Fast fail on connection issues
+        )
+
+        # Configure processor to drop spans instead of blocking when queue is full
+        processor = BatchSpanProcessor(
+            exporter,
+            max_queue_size=settings.max_queue_size,
+            schedule_delay_millis=5000,  # Export every 5s (default)
+            max_export_batch_size=512,   # Batch size (default)
+            export_timeout_millis=settings.export_timeout * 1000  # Convert to ms
+        )
+
         provider.add_span_processor(processor)
 
         # Set as global tracer provider
         trace.set_tracer_provider(provider)
 
-        logger.info(f"[TRACING] OpenTelemetry initialized: endpoint={settings.endpoint}, service={settings.service_name}")
+        logger.info(
+            f"[TRACING] OpenTelemetry initialized: endpoint={settings.endpoint}, "
+            f"service={settings.service_name}, timeout={settings.export_timeout}s, "
+            f"queue_size={settings.max_queue_size}"
+        )
         _initialized = True
 
     except Exception as e:
         logger.error(f"[TRACING] Failed to initialize OpenTelemetry: {e}")
-        _initialized = True  # Don't retry
+        logger.warning("[TRACING] Tracing disabled - server will continue without observability")
+        _initialized = True  # Don't retry, server continues normally
 
 
 def get_tracer(name: str) -> trace.Tracer:
@@ -64,12 +82,25 @@ def get_tracer(name: str) -> trace.Tracer:
     return trace.get_tracer(name)
 
 
-def shutdown_tracing() -> None:
-    """Shutdown tracing and flush pending spans."""
-    provider = trace.get_tracer_provider()
-    if hasattr(provider, 'shutdown'):
-        provider.shutdown()
-        logger.debug("[TRACING] OpenTelemetry shutdown complete")
+def shutdown_tracing(timeout_seconds: int = 3) -> None:
+    """Shutdown tracing and flush pending spans with timeout.
+
+    Args:
+        timeout_seconds: Max time to wait for shutdown (default: 3s)
+    """
+    try:
+        provider = trace.get_tracer_provider()
+        if hasattr(provider, 'shutdown'):
+            # Use force_flush with timeout, then shutdown
+            if hasattr(provider, 'force_flush'):
+                success = provider.force_flush(timeout_millis=timeout_seconds * 1000)
+                if not success:
+                    logger.warning("[TRACING] force_flush timed out, some spans may be lost")
+            provider.shutdown()
+            logger.debug("[TRACING] OpenTelemetry shutdown complete")
+    except Exception as e:
+        # Non-fatal - don't block server shutdown on tracing errors
+        logger.warning(f"[TRACING] Shutdown encountered error (non-fatal): {e}")
 
 
 def record_span(name: str) -> Callable[[Callable[P, T]], Callable[P, T]]:
