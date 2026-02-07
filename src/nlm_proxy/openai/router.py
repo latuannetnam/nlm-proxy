@@ -110,24 +110,47 @@ class SmartRouter:
 
         add_span_attributes(candidates_count=len(notebooks))
 
-        # Get max source titles from env or use default
+        # Get configuration from environment
         max_source_titles = int(
             os.environ.get("NLM_PROXY_ROUTING_MAX_SOURCE_TITLES", DEFAULT_MAX_SOURCE_TITLES)
         )
+        source_descriptions_enabled = os.environ.get(
+            "NLM_PROXY_ROUTING_SOURCE_DESCRIPTIONS_ENABLED", "true"
+        ).lower() in ("true", "1", "yes")
+        source_max_keywords = int(
+            os.environ.get("NLM_PROXY_ROUTING_SOURCE_MAX_KEYWORDS", "5")
+        )
+        source_summary_max_chars = int(
+            os.environ.get("NLM_PROXY_ROUTING_SOURCE_SUMMARY_MAX_CHARS", "80")
+        )
+        source_descriptions_max_sources = int(
+            os.environ.get("NLM_PROXY_ROUTING_SOURCE_DESCRIPTIONS_MAX_SOURCES", "10")
+        )
 
         # Build notebook info for LLM with source-level information
-        notebooks_info = [
-            {
+        notebooks_info = []
+        for nb in notebooks:
+            info: dict = {
                 "id": nb.id,
                 "title": nb.title,
                 "summary": nb.summary[:500] if nb.summary else "",
                 "topics": nb.topics[:5] if nb.topics else [],
                 "source_count": nb.source_count,
                 "source_types": nb.source_types,
-                "source_titles": nb.source_titles[:max_source_titles]
             }
-            for nb in notebooks
-        ]
+
+            if source_descriptions_enabled:
+                # Include full source descriptions with keywords and summaries
+                info["sources"] = nb.get_source_descriptions(
+                    max_sources=source_descriptions_max_sources,
+                    max_keywords=source_max_keywords,
+                    summary_max_chars=source_summary_max_chars
+                )[:max_source_titles]
+            else:
+                # Fallback to title-only mode
+                info["source_titles"] = nb.source_titles[:max_source_titles]
+
+            notebooks_info.append(info)
 
         prompt_template = load_prompt("select_notebook")
         prompt = prompt_template.format(

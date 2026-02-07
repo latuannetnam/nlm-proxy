@@ -150,6 +150,22 @@ class SmartRoutingSettings(BaseSettings):
         default=15,
         description="Max source titles to include in selection prompt"
     )
+    source_descriptions_enabled: bool = Field(
+        default=True,
+        description="Include source keywords and summaries in selection prompt"
+    )
+    source_max_keywords: int = Field(
+        default=5,
+        description="Max keywords per source to include"
+    )
+    source_summary_max_chars: int = Field(
+        default=80,
+        description="Max chars of source summary (first sentence or truncated)"
+    )
+    source_descriptions_max_sources: int = Field(
+        default=10,
+        description="Max sources with descriptions (others get title only)"
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="NLM_PROXY_ROUTING_",

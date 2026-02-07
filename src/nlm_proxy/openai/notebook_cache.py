@@ -20,6 +20,50 @@ DEFAULT_MAX_SOURCE_TITLES = 15
 MAX_SOURCE_TITLE_LENGTH = 100
 
 
+def _extract_first_sentence(text: str, max_chars: int = 80) -> str:
+    """Extract first sentence or truncate to max_chars.
+
+    Handles:
+    - Empty/None text
+    - Markdown cleanup (removes leading ** or ## markers)
+    - Sentence extraction (splits on . ! ?)
+    - Word-boundary truncation with ellipsis
+    """
+    if not text:
+        return ""
+
+    # Clean up markdown formatting at the start
+    cleaned = text.strip()
+    while cleaned.startswith(("**", "##", "# ", "- ")):
+        if cleaned.startswith("**"):
+            cleaned = cleaned[2:]
+        elif cleaned.startswith("##"):
+            cleaned = cleaned[2:]
+        elif cleaned.startswith("# "):
+            cleaned = cleaned[2:]
+        elif cleaned.startswith("- "):
+            cleaned = cleaned[2:]
+        cleaned = cleaned.strip()
+
+    # Try to extract first sentence
+    for end_char in ".!?":
+        idx = cleaned.find(end_char)
+        if 0 < idx < max_chars:
+            return cleaned[:idx + 1].strip()
+
+    # No sentence boundary found within limit - truncate at word boundary
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    # Find last space before max_chars
+    truncated = cleaned[:max_chars]
+    last_space = truncated.rfind(" ")
+    if last_space > max_chars // 2:
+        return truncated[:last_space] + "..."
+
+    return truncated + "..."
+
+
 @dataclass
 class SourceInfo:
     """Cached source information for a notebook."""
@@ -61,6 +105,41 @@ class NotebookInfo:
             else src.title
             for src in self.sources
         ]
+
+    def get_source_descriptions(
+        self,
+        max_sources: int = 10,
+        max_keywords: int = 5,
+        summary_max_chars: int = 80
+    ) -> list[dict]:
+        """Get source info with keywords and truncated summaries.
+
+        Args:
+            max_sources: Max sources to include full descriptions for
+            max_keywords: Max keywords per source
+            summary_max_chars: Max chars for summary (first sentence or truncated)
+
+        Returns:
+            List of dicts with title, keywords, and summary.
+            Sources beyond max_sources get title only.
+        """
+        result = []
+        for i, src in enumerate(self.sources):
+            title = src.title[:MAX_SOURCE_TITLE_LENGTH] if len(src.title) > MAX_SOURCE_TITLE_LENGTH else src.title
+
+            if i < max_sources:
+                # Full description for first N sources
+                entry: dict = {"title": title}
+                if src.keywords:
+                    entry["keywords"] = src.keywords[:max_keywords]
+                if src.summary:
+                    entry["summary"] = _extract_first_sentence(src.summary, summary_max_chars)
+                result.append(entry)
+            else:
+                # Title only for remaining sources
+                result.append({"title": title})
+
+        return result
 
 
 class NotebookCache:

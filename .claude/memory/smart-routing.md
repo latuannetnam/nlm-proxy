@@ -36,6 +36,10 @@ All use prefix `NLM_PROXY_ROUTING_`:
 | `SUMMARY_CACHE_TTL` | `3600` | Cache TTL in seconds |
 | `SOURCE_FETCH_CONCURRENCY` | `10` | Max parallel source summary fetches |
 | `MAX_SOURCE_TITLES` | `15` | Max source titles in selection prompt |
+| `SOURCE_DESCRIPTIONS_ENABLED` | `true` | Include source keywords and summaries |
+| `SOURCE_MAX_KEYWORDS` | `5` | Max keywords per source |
+| `SOURCE_SUMMARY_MAX_CHARS` | `80` | Max chars of source summary |
+| `SOURCE_DESCRIPTIONS_MAX_SOURCES` | `10` | Sources with full descriptions (rest get title only) |
 
 ## Logging Tags
 

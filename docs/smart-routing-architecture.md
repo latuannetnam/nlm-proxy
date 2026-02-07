@@ -87,9 +87,10 @@ The smart router uses **source-level information** to make more accurate noteboo
 │  Selection LLM receives:                                                │
 │  - Notebook summaries and topics                                        │
 │  - Source counts by type (e.g., {"pdf": 2, "url": 1})                  │
-│  - Source titles (up to 15)                                            │
+│  - Source descriptions with keywords and summaries (first 10 sources)  │
+│  - Source titles only (remaining sources)                              │
 │                                                                         │
-│  Result: Routes to "ML Research" (matches source title)                 │
+│  Result: Routes to "ML Research" (matches source keywords/title)        │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -201,6 +202,18 @@ class NotebookInfo:
     def source_titles(self) -> list[str]:
         """List of source titles (truncated to 100 chars)."""
         ...
+
+    def get_source_descriptions(
+        self,
+        max_sources: int = 10,
+        max_keywords: int = 5,
+        summary_max_chars: int = 80
+    ) -> list[dict]:
+        """Get source info with keywords and truncated summaries.
+        Returns: [{"title": "...", "keywords": [...], "summary": "..."}, ...]
+        Sources beyond max_sources get title only.
+        """
+        ...
 ```
 
 **Cache Lifecycle:**
@@ -278,7 +291,7 @@ class RoutingDecision:
 
 **Notebook Selection Data:**
 ```python
-# Data sent to selection LLM
+# Data sent to selection LLM (with source_descriptions_enabled=True)
 notebooks_info = [
     {
         "id": "abc-123",
@@ -287,15 +300,38 @@ notebooks_info = [
         "topics": ["transformers", "attention", "NLP"],
         "source_count": 5,
         "source_types": {"pdf": 3, "url": 2},
-        "source_titles": [
-            "Attention Is All You Need.pdf",
-            "BERT Paper.pdf",
-            "GPT-3 Paper.pdf",
-            "pytorch.org/docs",
-            "huggingface.co/docs"
+        "sources": [
+            # First 10 sources get full descriptions
+            {
+                "title": "Attention Is All You Need.pdf",
+                "keywords": ["transformer", "attention", "encoder-decoder"],
+                "summary": "Introduces the Transformer architecture."
+            },
+            {
+                "title": "BERT Paper.pdf",
+                "keywords": ["BERT", "pre-training", "NLP"],
+                "summary": "Presents bidirectional encoder representations."
+            },
+            # Remaining sources get title only
+            {"title": "GPT-3 Paper.pdf"},
+            {"title": "pytorch.org/docs"},
+            {"title": "huggingface.co/docs"}
         ]
     },
     ...
+]
+
+# With source_descriptions_enabled=False (legacy mode)
+notebooks_info = [
+    {
+        "id": "abc-123",
+        ...
+        "source_titles": [
+            "Attention Is All You Need.pdf",
+            "BERT Paper.pdf",
+            ...
+        ]
+    }
 ]
 ```
 
@@ -329,13 +365,17 @@ User query:
 {query}
 
 Selection criteria (in order of importance):
-1. **Source titles** - If the query mentions a specific document, paper, URL,
+1. **Source keywords** - Match query terms to source keywords
+   (e.g., "neural networks" matches keywords ["neural", "deep learning"])
+2. **Source summaries** - Match query intent to source descriptions
+   (e.g., "how transformers work" matches summary about attention mechanisms)
+3. **Source titles** - If the query mentions a specific document, paper, URL,
    or file name, prioritize notebooks containing sources with matching titles
-2. **Source types** - Match query intent to source types (e.g., "PDF paper"
+4. **Source types** - Match query intent to source types (e.g., "PDF paper"
    queries should prefer notebooks with PDF sources)
-3. **Notebook summary** - Consider how well the notebook's overall topic
+5. **Notebook summary** - Consider how well the notebook's overall topic
    matches the query
-4. **Topics** - Use suggested topics as additional context for relevance
+6. **Topics** - Use suggested topics as additional context for relevance
 
 Respond with ONLY the notebook_id (UUID) of the most relevant notebook.
 ```
@@ -409,6 +449,10 @@ All settings use the `NLM_PROXY_ROUTING_` prefix.
 | `NLM_PROXY_ROUTING_SUMMARY_CACHE_TTL` | `3600` | Cache TTL in seconds |
 | `NLM_PROXY_ROUTING_SOURCE_FETCH_CONCURRENCY` | `10` | Max parallel source summary fetches |
 | `NLM_PROXY_ROUTING_MAX_SOURCE_TITLES` | `15` | Max source titles in selection prompt |
+| `NLM_PROXY_ROUTING_SOURCE_DESCRIPTIONS_ENABLED` | `true` | Include source keywords and summaries |
+| `NLM_PROXY_ROUTING_SOURCE_MAX_KEYWORDS` | `5` | Max keywords per source |
+| `NLM_PROXY_ROUTING_SOURCE_SUMMARY_MAX_CHARS` | `80` | Max chars of source summary |
+| `NLM_PROXY_ROUTING_SOURCE_DESCRIPTIONS_MAX_SOURCES` | `10` | Sources with full descriptions (rest title only) |
 
 **Example `.env`:**
 ```bash
@@ -419,6 +463,12 @@ NLM_PROXY_ROUTING_ROUTER_MODEL_NAME=knowledge-finder
 NLM_PROXY_ROUTING_SUMMARY_CACHE_TTL=3600
 NLM_PROXY_ROUTING_SOURCE_FETCH_CONCURRENCY=10
 NLM_PROXY_ROUTING_MAX_SOURCE_TITLES=15
+
+# Source descriptions (enhanced routing)
+NLM_PROXY_ROUTING_SOURCE_DESCRIPTIONS_ENABLED=true
+NLM_PROXY_ROUTING_SOURCE_MAX_KEYWORDS=5
+NLM_PROXY_ROUTING_SOURCE_SUMMARY_MAX_CHARS=80
+NLM_PROXY_ROUTING_SOURCE_DESCRIPTIONS_MAX_SOURCES=10
 ```
 
 ## Logging Tags

@@ -7,9 +7,13 @@ User query:
 {query}
 
 Selection criteria (in order of importance):
-1. **Source titles** - If the query mentions a specific document, paper, URL, or file name, prioritize notebooks containing sources with matching titles
-2. **Source types** - Match query intent to source types (e.g., "PDF paper" queries should prefer notebooks with PDF sources)
-3. **Notebook summary** - Consider how well the notebook's overall topic matches the query
-4. **Topics** - Use suggested topics as additional context for relevance
+1. **Source keywords** - Match query terms to source keywords (e.g., "neural networks" matches keywords ["neural", "deep learning"])
+2. **Source summaries** - Match query intent to source descriptions (e.g., "how transformers work" matches summary about attention mechanisms)
+3. **Source titles** - If the query mentions a specific document, paper, URL, or file name, prioritize notebooks containing sources with matching titles
+4. **Source types** - Match query intent to source types (e.g., "PDF paper" queries should prefer notebooks with PDF sources)
+5. **Notebook summary** - Consider how well the notebook's overall topic matches the query
+6. **Topics** - Use suggested topics as additional context for relevance
+
+Note: Each notebook's "sources" array contains source metadata. Sources with full descriptions include "title", "keywords", and "summary". Sources beyond the description limit have "title" only.
 
 Respond with ONLY the notebook_id (UUID) of the most relevant notebook. If none seem relevant, respond with the first notebook's ID.
