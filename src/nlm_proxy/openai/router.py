@@ -152,11 +152,33 @@ class SmartRouter:
 
             notebooks_info.append(info)
 
+            # Log notebook candidate summary
+            sources_key = "sources" if "sources" in info else "source_titles"
+            sources_data = info.get(sources_key, [])
+
+            # Extract top keywords from sources (if available)
+            top_keywords = []
+            if sources_key == "sources":
+                for src in sources_data[:3]:
+                    top_keywords.extend(src.get("keywords", [])[:2])
+
+            logger.debug(
+                f"[ROUTER] Candidate: {info['title']} | "
+                f"sources={info['source_count']} | "
+                f"types={info['source_types']} | "
+                f"keywords={top_keywords[:5]}"
+            )
+
         prompt_template = load_prompt("select_notebook")
         prompt = prompt_template.format(
             notebooks_json=json.dumps(notebooks_info, indent=2),
             query=query
         )
+
+        # Log prompt size metrics
+        prompt_chars = len(prompt)
+        logger.debug(f"[ROUTER] Prompt size: {prompt_chars} chars (~{prompt_chars // 4} tokens)")
+        logger.debug(f"[ROUTER] Selection prompt:\n{prompt}")
 
         logger.debug(f"[ROUTER] Asking LLM to select from {len(notebooks)} notebooks")
         response = await self.llm_client.complete(prompt, max_tokens=100)
