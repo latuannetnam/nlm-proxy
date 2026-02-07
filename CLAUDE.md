@@ -5,7 +5,12 @@
 **NLM Proxy** - Provides programmatic access to NotebookLM (notebooklm.google.com) using internal APIs. Tested with personal/free tier accounts.
 
 ## Rules
-- After done planing for new feature, always write plan to docs/plan folder
+- After done planing for new feature, always write plan to docs/plans folder
+- **ALWAYS** Update follwoing important documents with appropriate contents after done implementating new features, fix bug, make important changes to code:
+  + README.md
+  + docs\smart-routing-architecture.md
+  + docs\TRACING.md
+  + CLAUDE.md
 
 ## Quick Commands
 
@@ -44,7 +49,6 @@ Detailed documentation in `.claude/memory/`:
 | Document | When to Read |
 |----------|--------------|
 | `docs/API_REFERENCE.md` | Debugging APIs, adding features, RPC details |
-| `docs/MCP_TEST_PLAN.md` | Testing MCP tools, validation |
 | `docs/ASYNCIO_THREADING_PITFALLS.md` | Asyncio + threading bugs, "Event loop is closed" errors |
 
 ## Known Issues & Lessons Learned
