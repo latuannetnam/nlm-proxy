@@ -180,12 +180,32 @@ class TracingSettings(BaseSettings):
 
     enabled: bool = Field(default=False, description="Enable OpenTelemetry tracing")
     endpoint: str = Field(
-        default="http://localhost:4317",
-        description="OTLP collector endpoint (gRPC)"
+        default="localhost:4317",
+        description="OTLP collector endpoint (host:port)"
     )
     service_name: str = Field(
         default="nlm-proxy",
         description="Service name in traces"
+    )
+    protocol: Literal["grpc", "http"] = Field(
+        default="grpc",
+        description="Exporter protocol: grpc or http"
+    )
+    api_key: str | None = Field(
+        default=None,
+        description="Bearer token for collector authentication"
+    )
+    ca_cert_path: str | None = Field(
+        default=None,
+        description="Path to CA certificate for TLS verification"
+    )
+    verify_cert: bool = Field(
+        default=True,
+        description="Verify server certificate (HTTP only, gRPC always verifies)"
+    )
+    insecure: bool = Field(
+        default=True,
+        description="Use plain text (no TLS). Set to false for TLS."
     )
     export_timeout: int = Field(
         default=2,
