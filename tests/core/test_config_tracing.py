@@ -2,14 +2,25 @@
 
 import os
 import pytest
+from unittest.mock import patch
 from nlm_proxy.core.config import TracingSettings
 
 
 class TestTracingSettings:
     """Test TracingSettings fields and defaults."""
 
-    def test_default_values(self):
+    def test_default_values(self, monkeypatch, tmp_path):
         """Test default configuration values."""
+        # Clear any environment variables that might affect defaults
+        for key in ["ENABLED", "ENDPOINT", "SERVICE_NAME", "PROTOCOL", "API_KEY",
+                    "CA_CERT_PATH", "VERIFY_CERT", "INSECURE", "EXPORT_TIMEOUT",
+                    "MAX_QUEUE_SIZE", "REQUEST_MAX_LENGTH", "RESPONSE_MAX_LENGTH"]:
+            monkeypatch.delenv(f"NLM_PROXY_OTEL_{key}", raising=False)
+
+        # Change to temp directory with no .env file to prevent loading user's config
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path))  # Prevent loading from ~/.nlm-proxy/.env
+
         settings = TracingSettings()
 
         assert settings.enabled is False
