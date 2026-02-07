@@ -2,11 +2,12 @@
 - ~~1. Configuration settings via env variable and command line argument~~
 - ~~5. OpenAI endpoint authentication~~
 - ~~3. Smart router: LLM question routing~~
-- [Doing] Track notebook query -> NotebookLM query analysis: question, answer, notebook, quality etc...
+- [Done] Track notebook query -> NotebookLM query analysis: question, answer, notebook, quality etc...
 - [] Enhance NotebookLM selection using metadata: source title + source description
 - [] Switch to Agent library for more complex task
 - [] Use LLM task to pre-process in individual notebook model
 - [ ] Multiple authentication profiles
 - [ ] Review FastAPI for support async session management: SessionStore, Notebook cache
+- [] MS Teams chatbot
 -  [Pending] Smart router: cross notebook query: feature/cross-notebook-query
 - [Pending] Return notebooklm citation with source link -> current logic not work, may be NotebookLM use internal API to get citation: feature/openai-proxy-citation 

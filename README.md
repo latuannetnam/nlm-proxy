@@ -571,10 +571,10 @@ src/nlm_proxy/
 
 ```bash
 # Install dependencies
-uv tool install .
+uv tool install .[all] --reinstall
 
 # Reinstall after code changes
-uv cache clean && uv tool install --force .
+uv cache clean && uv tool install --force .[all]
 
 # Run tests
 uv run pytest
