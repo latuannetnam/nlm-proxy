@@ -134,20 +134,14 @@ def init_tracing() -> None:
         return
 
     try:
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-
         # Create resource with service name
         resource = Resource.create({SERVICE_NAME: settings.service_name})
 
         # Create and configure tracer provider
         provider = TracerProvider(resource=resource)
 
-        # Configure OTLP exporter with fast timeout to prevent blocking
-        exporter = OTLPSpanExporter(
-            endpoint=settings.endpoint,
-            insecure=True,
-            timeout=settings.export_timeout  # Fast fail on connection issues
-        )
+        # Create exporter using factory (handles protocol, TLS, auth)
+        exporter = _create_exporter(settings)
 
         # Configure processor to drop spans instead of blocking when queue is full
         processor = BatchSpanProcessor(
@@ -163,10 +157,13 @@ def init_tracing() -> None:
         # Set as global tracer provider
         trace.set_tracer_provider(provider)
 
+        # Log configuration summary
+        tls_status = "TLS" if not settings.insecure else "plain"
+        auth_status = "auth=enabled" if settings.api_key else "auth=disabled"
         logger.info(
-            f"[TRACING] OpenTelemetry initialized: endpoint={settings.endpoint}, "
-            f"service={settings.service_name}, timeout={settings.export_timeout}s, "
-            f"queue_size={settings.max_queue_size}"
+            f"[TRACING] OpenTelemetry initialized: protocol={settings.protocol}, "
+            f"endpoint={settings.endpoint}, {tls_status}, {auth_status}, "
+            f"service={settings.service_name}"
         )
         _initialized = True
 
