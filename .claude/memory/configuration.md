@@ -53,10 +53,51 @@ NLM_PROXY_ROUTING_MAX_SOURCE_TITLES=15  # max source titles in selection prompt
 
 # OpenTelemetry Tracing
 NLM_PROXY_OTEL_ENABLED=false
-NLM_PROXY_OTEL_ENDPOINT=http://localhost:4317
+NLM_PROXY_OTEL_ENDPOINT=localhost:4317
 NLM_PROXY_OTEL_SERVICE_NAME=nlm-proxy
+NLM_PROXY_OTEL_PROTOCOL=grpc  # grpc or http
+NLM_PROXY_OTEL_API_KEY=  # Bearer token for authentication
+NLM_PROXY_OTEL_INSECURE=true  # true=plain text, false=TLS
+NLM_PROXY_OTEL_VERIFY_CERT=true  # Skip cert validation (HTTP only)
+NLM_PROXY_OTEL_CA_CERT_PATH=  # Path to custom CA certificate
 NLM_PROXY_OTEL_REQUEST_MAX_LENGTH=500  # max chars of user query (0=disable)
 NLM_PROXY_OTEL_RESPONSE_MAX_LENGTH=1000  # max chars of response (0=disable)
+```
+
+## Tracing Authentication & TLS
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NLM_PROXY_OTEL_PROTOCOL` | `grpc` | Exporter protocol: `grpc` or `http` |
+| `NLM_PROXY_OTEL_API_KEY` | (none) | Bearer token for collector authentication |
+| `NLM_PROXY_OTEL_INSECURE` | `true` | `true`=plain text, `false`=TLS enabled |
+| `NLM_PROXY_OTEL_VERIFY_CERT` | `true` | Skip cert validation (HTTP only) |
+| `NLM_PROXY_OTEL_CA_CERT_PATH` | (none) | Path to private CA certificate |
+
+### Common Configurations
+
+**Local development (plain text):**
+```bash
+NLM_PROXY_OTEL_PROTOCOL=grpc
+NLM_PROXY_OTEL_INSECURE=true
+```
+
+**Production with private CA:**
+```bash
+NLM_PROXY_OTEL_PROTOCOL=http
+NLM_PROXY_OTEL_INSECURE=false
+NLM_PROXY_OTEL_CA_CERT_PATH=/etc/ssl/otel-ca.pem
+NLM_PROXY_OTEL_API_KEY=your-bearer-token
+```
+
+**Development with self-signed cert (skip verify):**
+```bash
+NLM_PROXY_OTEL_PROTOCOL=http
+NLM_PROXY_OTEL_INSECURE=false
+NLM_PROXY_OTEL_VERIFY_CERT=false
+```
+
+**Note:** gRPC protocol does not support `verify_cert=false`. Use HTTP protocol for skip-verify scenarios.
 ```
 
 ## .env File Locations
