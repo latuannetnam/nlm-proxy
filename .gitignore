@@ -61,3 +61,8 @@ run*
 # Other env files
 .env
 .env.local
+
+# Other sensitive files
+*.crt
+*.key
+*.pem

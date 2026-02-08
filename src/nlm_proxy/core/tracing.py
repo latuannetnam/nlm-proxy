@@ -2,11 +2,15 @@
 
 from functools import wraps
 from pathlib import Path
-from typing import Callable, TypeVar, ParamSpec
+from typing import Callable, TypeVar, ParamSpec, Sequence
 
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
+from opentelemetry.sdk.trace import TracerProvider, ReadableSpan
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.trace import Status, StatusCode
 
@@ -16,9 +20,57 @@ from nlm_proxy.core.logging import get_logger
 logger = get_logger(__name__)
 
 _initialized = False
+_export_error_logged = False  # Track if we've already logged export errors
 
 P = ParamSpec('P')
 T = TypeVar('T')
+
+
+class SafeSpanExporter(SpanExporter):
+    """Wrapper that catches and logs export exceptions instead of propagating them.
+
+    This prevents noisy "Exception while exporting Span" messages from flooding logs
+    when the collector is unreachable or has SSL issues.
+    """
+
+    def __init__(self, delegate: SpanExporter):
+        self._delegate = delegate
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        global _export_error_logged
+        try:
+            return self._delegate.export(spans)
+        except Exception as e:
+            # Only log once to avoid log spam
+            if not _export_error_logged:
+                error_msg = str(e)
+                if "CERTIFICATE_VERIFY_FAILED" in error_msg:
+                    logger.warning(
+                        "[TRACING] SSL certificate verification failed. "
+                        "Set NLM_PROXY_OTEL_VERIFY_CERT=false or provide valid CA cert. "
+                        "Tracing will continue but spans may be lost."
+                    )
+                elif "UNAVAILABLE" in error_msg or "Connection refused" in error_msg:
+                    logger.warning(
+                        f"[TRACING] Cannot reach collector: {e}. "
+                        "Tracing will continue but spans may be lost."
+                    )
+                else:
+                    logger.warning(
+                        f"[TRACING] Export failed: {e}. "
+                        "Tracing will continue but spans may be lost."
+                    )
+                _export_error_logged = True
+            return SpanExportResult.FAILURE
+
+    def shutdown(self) -> None:
+        self._delegate.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        try:
+            return self._delegate.force_flush(timeout_millis)
+        except Exception:
+            return False
 
 
 def _build_http_url(endpoint: str, insecure: bool) -> str:
@@ -44,32 +96,60 @@ def _create_http_exporter(settings, headers: dict | None) -> SpanExporter:
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
         OTLPSpanExporter as HTTPSpanExporter
     )
+    import os
+    import urllib3
 
     # Build full URL
     endpoint_url = _build_http_url(settings.endpoint, settings.insecure)
 
-    # Determine certificate_verification value
+    # Prepare exporter kwargs
+    exporter_kwargs = {
+        "endpoint": endpoint_url,
+        "headers": headers,
+        "timeout": settings.export_timeout,
+    }
+
     if settings.insecure:
-        # Plain HTTP, no cert verification needed
-        cert_verify = True  # Ignored for http://
+        # Plain HTTP, no cert configuration needed
+        cert_info = "insecure (HTTP)"
     elif not settings.verify_cert:
-        cert_verify = False
+        # Skip certificate verification by setting environment variable
+        # This is the most reliable way to disable SSL verification
+        os.environ["PYTHONHTTPSVERIFY"] = "0"
+        os.environ["CURL_CA_BUNDLE"] = ""
+        os.environ["REQUESTS_CA_BUNDLE"] = ""
+        # Suppress InsecureRequestWarning
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        cert_info = "verify=disabled (development only)"
+        logger.warning(
+            "[TRACING] Certificate verification disabled - only use in development!"
+        )
     elif settings.ca_cert_path:
-        cert_verify = settings.ca_cert_path
+        # Use custom CA certificate - expand path and validate
+        ca_path = Path(os.path.expanduser(settings.ca_cert_path))
+        if not ca_path.is_absolute():
+            ca_path = Path.cwd() / ca_path
+        if not ca_path.exists():
+            raise FileNotFoundError(
+                f"[TRACING] CA certificate not found: {ca_path}"
+            )
+        # Pass certificate to exporter
+        exporter_kwargs["certificate_file"] = str(ca_path)
+        cert_info = f"ca_cert={ca_path}"
     else:
-        cert_verify = True  # System CA
+        # Use system CA bundle
+        cert_info = "system CA"
 
     logger.debug(
         f"[TRACING] Creating HTTP exporter: endpoint={endpoint_url}, "
-        f"verify={cert_verify}, auth={'enabled' if headers else 'disabled'}"
+        f"{cert_info}, auth={'enabled' if headers else 'disabled'}"
     )
 
-    return HTTPSpanExporter(
-        endpoint=endpoint_url,
-        headers=headers,
-        certificate_verification=cert_verify,
-        timeout=settings.export_timeout,
-    )
+    try:
+        return HTTPSpanExporter(**exporter_kwargs)
+    except Exception as e:
+        logger.error(f"[TRACING] Failed to create HTTP exporter: {e}")
+        raise
 
 
 def _create_grpc_exporter(settings, headers: dict | None) -> SpanExporter:
@@ -141,7 +221,10 @@ def init_tracing() -> None:
         provider = TracerProvider(resource=resource)
 
         # Create exporter using factory (handles protocol, TLS, auth)
-        exporter = _create_exporter(settings)
+        raw_exporter = _create_exporter(settings)
+
+        # Wrap with SafeSpanExporter to catch and log export errors gracefully
+        exporter = SafeSpanExporter(raw_exporter)
 
         # Configure processor to drop spans instead of blocking when queue is full
         processor = BatchSpanProcessor(
@@ -270,8 +353,8 @@ def instrument_httpx() -> None:
         return
 
     try:
-        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentation
-        HTTPXClientInstrumentation().instrument()
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        HTTPXClientInstrumentor().instrument()
         logger.info("[TRACING] httpx instrumentation enabled")
     except ImportError:
         logger.warning("[TRACING] httpx instrumentation not available")

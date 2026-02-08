@@ -944,67 +944,48 @@ name = "nlm-proxy"
 version = "1.0.3"
 source = { editable = "." }
 dependencies = [
+    { name = "fastapi" },
+    { name = "fastmcp" },
     { name = "httpx" },
+    { name = "openai" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-instrumentation-httpx" },
+    { name = "opentelemetry-sdk" },
     { name = "pydantic-settings" },
     { name = "typer" },
+    { name = "uvicorn" },
     { name = "websocket-client" },
 ]
 
 [package.optional-dependencies]
-all = [
-    { name = "fastapi" },
-    { name = "fastmcp" },
-    { name = "openai" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-instrumentation-fastapi" },
-    { name = "opentelemetry-instrumentation-httpx" },
-    { name = "opentelemetry-sdk" },
-    { name = "uvicorn" },
-]
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
-mcp = [
-    { name = "fastmcp" },
-]
-openai = [
-    { name = "fastapi" },
-    { name = "openai" },
-    { name = "uvicorn" },
-]
-otel = [
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-instrumentation-fastapi" },
-    { name = "opentelemetry-instrumentation-httpx" },
-    { name = "opentelemetry-sdk" },
-]
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", marker = "extra == 'openai'", specifier = ">=0.100.0" },
-    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=0.1.0" },
+    { name = "fastapi", specifier = ">=0.100.0" },
+    { name = "fastmcp", specifier = ">=0.1.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "nlm-proxy", extras = ["mcp", "openai", "otel"], marker = "extra == 'all'" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
-    { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20.0" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", marker = "extra == 'otel'", specifier = ">=1.20.0" },
-    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20.0" },
-    { name = "opentelemetry-instrumentation-fastapi", marker = "extra == 'otel'", specifier = ">=0.41b0" },
-    { name = "opentelemetry-instrumentation-httpx", marker = "extra == 'otel'", specifier = ">=0.41b0" },
-    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
+    { name = "openai", specifier = ">=1.0.0" },
+    { name = "opentelemetry-api", specifier = ">=1.20.0" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.20.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.20.0" },
+    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.41b0" },
+    { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.41b0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "typer", specifier = ">=0.9.0" },
-    { name = "uvicorn", marker = "extra == 'openai'", specifier = ">=0.23.0" },
+    { name = "uvicorn", specifier = ">=0.23.0" },
     { name = "websocket-client", specifier = ">=1.6.0" },
 ]
-provides-extras = ["mcp", "openai", "otel", "all", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "openai"

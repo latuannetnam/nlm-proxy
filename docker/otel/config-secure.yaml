@@ -1,0 +1,96 @@
+# OpenTelemetry Collector Configuration with TLS and Authentication
+#
+# This configuration enables:
+# - TLS encryption for gRPC and HTTP receivers
+# - Bearer token authentication for API key validation
+# - Secure communication between client and collector
+#
+# Setup instructions:
+# 1. Generate certificates (see docs/TRACING.md)
+# 2. Set OTEL_BEARER_TOKEN environment variable
+# 3. Mount certificates in docker-compose.yml
+
+extensions:
+  # Bearer token authentication extension
+  # Validates incoming requests have correct Authorization: Bearer <token> header
+  bearertokenauth:
+    # Token is loaded from environment variable for security
+    # Set OTEL_BEARER_TOKEN in docker-compose.yml or .env file
+    token: "${env:OTEL_BEARER_TOKEN}"
+
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        # TLS configuration for gRPC receiver
+        tls:
+          # Server certificate and private key
+          cert_file: /etc/otelcol-contrib/certs/server.crt
+          key_file: /etc/otelcol-contrib/certs/server.key
+          # Optional: client certificate validation (mTLS)
+          # client_ca_file: /etc/otelcol-contrib/certs/ca.crt
+          # Minimum TLS version
+          min_version: "1.2"
+        # Enable bearer token authentication
+        auth:
+          authenticator: bearertokenauth
+
+      http:
+        endpoint: 0.0.0.0:4318
+        # TLS configuration for HTTP receiver
+        tls:
+          cert_file: /etc/otelcol-contrib/certs/server.crt
+          key_file: /etc/otelcol-contrib/certs/server.key
+          min_version: "1.2"
+        # Enable bearer token authentication
+        auth:
+          authenticator: bearertokenauth
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  # Memory limiter prevents OOM by dropping data when memory usage is high
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+exporters:
+  clickhouse:
+    endpoint: tcp://clickhouse:9000
+    database: nlm_traces
+    traces_table_name: otel_traces
+    timeout: 5s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # Debug exporter for troubleshooting (disable in production)
+  debug:
+    verbosity: normal
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  extensions: [bearertokenauth, health_check]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse, debug]
+
+  # Telemetry configuration
+  telemetry:
+    logs:
+      # level: info
+      # Set to debug for troubleshooting TLS/auth issues
+      level: debug
