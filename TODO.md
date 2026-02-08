@@ -1,13 +1,20 @@
-- ~~4. Restructure CLAUDE.md, add section for each component with reference to external file~~
-- ~~1. Configuration settings via env variable and command line argument~~
-- ~~5. OpenAI endpoint authentication~~
-- ~~3. Smart router: LLM question routing~~
-- [Done] Track notebook query -> NotebookLM query analysis: question, answer, notebook, quality etc...
-- [] Enhance NotebookLM selection using metadata: source title + source description
-- [] Switch to Agent library for more complex task
-- [] Use LLM task to pre-process in individual notebook model
-- [ ] Multiple authentication profiles
-- [ ] Review FastAPI for support async session management: SessionStore, Notebook cache
-- [] MS Teams chatbot
--  [Pending] Smart router: cross notebook query: feature/cross-notebook-query
-- [Pending] Return notebooklm citation with source link -> current logic not work, may be NotebookLM use internal API to get citation: feature/openai-proxy-citation 
+# Project Roadmap & Todo
+
+## 🚧 In Progress
+- [ ] **MS Teams chatbot integration**
+- [ ] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks
+- [ ] **Pre-processing**: Use LLM task to pre-process in individual notebook models
+- [ ] **Authentication**: Support multiple authentication profiles
+- [ ] **Async Session Management**: Review FastAPI support for SessionStore and Notebook cache
+- [ ] **Smart Router**: Cross-notebook query support
+  - Status: Pending (`feature/cross-notebook-query`)
+- [ ] **Citations**: Return NotebookLM citation with source links
+  - Status: Pending (`feature/openai-proxy-citation`) - Current logic needs improvement (NotebookLM may use internal API)
+
+## ✅ Completed
+- [x] **Observability**: Track notebook query -> NotebookLM query analysis (question, answer, notebook, quality metrics)
+- [x] **Smart Router**: Enhance NotebookLM selection using metadata (source title + description)
+- [x] **Documentation**: Restructure CLAUDE.md with component sections and external references
+- [x] **Configuration**: Settings via environment variables and command line arguments
+- [x] **Security**: OpenAI endpoint authentication
+- [x] **Smart Router**: Basic LLM question routing implementation
