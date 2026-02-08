@@ -110,6 +110,68 @@ Architecture details: `docs/smart-routing-architecture.md`
 
 ## Known Issues & Lessons Learned
 
+### TLS Certificate Hostname vs IP Address (Critical)
+
+**Problem:** `tls: bad record MAC` error when connecting to remote OTEL collector via IP address.
+
+**Root Cause:** TLS certificates validate against Subject Alternative Names (SAN). When connecting via IP address, that exact IP must be in the certificate's SAN field. If the certificate only contains DNS hostnames, connecting via IP will fail.
+
+**Example Failure:**
+```bash
+# Certificate SAN contains:
+DNS:ai-analytics, DNS:localhost, DNS:nlm-otel-collector, IP:127.0.0.1
+
+# Client connects to:
+NLM_PROXY_OTEL_ENDPOINT=10.60.5.76:4317
+
+# Result: TLS handshake fails with "bad record MAC"
+```
+
+**Solution (Recommended): Use Hostname**
+
+Add hostname to local hosts file and connect via hostname instead of IP:
+
+**Linux/Mac** (`/etc/hosts`):
+```bash
+sudo bash -c 'echo "10.60.5.76    ai-analytics" >> /etc/hosts'
+```
+
+**Windows** (`C:\Windows\System32\drivers\etc\hosts` - requires Administrator):
+```
+10.60.5.76    ai-analytics
+```
+
+Then update client `.env`:
+```bash
+# Use hostname instead of IP (must match certificate SAN)
+NLM_PROXY_OTEL_ENDPOINT=ai-analytics:4317
+NLM_PROXY_OTEL_INSECURE=false
+NLM_PROXY_OTEL_CA_CERT_PATH=/path/to/ca.crt
+NLM_PROXY_OTEL_API_KEY=your-bearer-token
+```
+
+**Why this works:** Certificate includes `DNS:ai-analytics` in SAN, so hostname validation succeeds.
+
+**Alternative Solutions:**
+1. Regenerate certificate with server IP in SAN (edit `docker/otel/generate-certs.sh`)
+2. Use `VERIFY_CERT=false` with HTTP protocol (dev/testing only)
+
+**Remote Collector Connection Checklist:**
+- ✅ Generate certificates with correct hostname/IP in SAN
+- ✅ Bearer token must match on both client and collector
+- ✅ Add hostname to `/etc/hosts` if connecting remotely
+- ✅ Use `INSECURE=false` for TLS connections
+- ✅ Copy `ca.crt` to client machine for verification
+- ✅ Test locally first: `openssl s_client -connect localhost:4317 -CAfile ca.crt`
+
+**Common Errors:**
+- `bad record MAC` → Hostname/IP mismatch in certificate SAN
+- `UNAVAILABLE` → Check collector logs for real error
+- `authentication failed` → Bearer token mismatch
+- `x509: unknown authority` → Missing or wrong CA cert path
+
+**Reference:** `docs/TRACING.md` for complete troubleshooting guide.
+
 ### Duplicate Span Anti-Pattern (Fixed)
 
 **Issue:** Creating multiple spans with the same name in a single trace causes `argMax()` aggregation queries to return non-deterministic results. This manifested as Grafana dashboard data appearing/disappearing on refresh.

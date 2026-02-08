@@ -125,6 +125,24 @@ NLM_PROXY_OTEL_ENDPOINT=http://localhost:4317
 NLM_PROXY_OTEL_SERVICE_NAME=nlm-proxy
 ```
 
+### Network Proxy Configuration
+
+If your Docker host is behind a corporate proxy, you must configure proxy settings to ensure the OTel Collector can communicate properly.
+
+Add these variables to your `.env` file in the project root:
+
+```bash
+# Proxy URL
+HTTP_PROXY=http://proxy.example.com:8080
+HTTPS_PROXY=http://proxy.example.com:8080
+
+# CRITICAL: Whitelist internal services
+# Must include localhost, 127.0.0.1, and docker service names
+NO_PROXY=localhost,127.0.0.1,::1,nlm-clickhouse,nlm-otel-collector
+```
+
+**Important:** If `NO_PROXY` is incorrect, the OTel Collector might try to route internal traffic (to ClickHouse) through your corporate proxy, causing connection failures.
+
 ### Programmatic Configuration
 
 ```python
@@ -853,6 +871,7 @@ sudo journalctl -u otelcol-contrib -f
 | Error in Collector Logs | Cause | Solution |
 |-------------------------|-------|----------|
 | `authentication failed` | Wrong bearer token | Check `NLM_PROXY_OTEL_API_KEY` matches collector's `bearertokenauth.token` |
+| `tls: bad record MAC` | Client connecting via IP but cert only has hostname in SAN | Add hostname to client's `/etc/hosts` (Linux/Mac) or `C:\Windows\System32\drivers\etc\hosts` (Windows) and connect via hostname instead of IP |
 | `tls: first record does not look like a TLS handshake` | Client sending plain HTTP to TLS endpoint | Set `NLM_PROXY_OTEL_INSECURE=false` on client |
 | `http: server gave HTTP response to HTTPS client` | Client sending HTTPS to plain HTTP endpoint | Set `NLM_PROXY_OTEL_INSECURE=true` or remove TLS from collector |
 | `x509: certificate signed by unknown authority` | Client can't verify server certificate | Set `NLM_PROXY_OTEL_CA_CERT_PATH` or use `VERIFY_CERT=false` (HTTP only) |
@@ -937,6 +956,73 @@ nlm-proxy serve openai --port 8080 --debug 2>&1 | tee nlm-proxy.log
 # Look for OTLP export details
 grep -i "export\|grpc\|unavailable" nlm-proxy.log
 ```
+
+### TLS Hostname vs IP Connection Issue
+
+**Problem:** When connecting to a remote collector using an IP address (e.g., `10.60.5.76:4317`), you may see `tls: bad record MAC` errors in the collector logs even though the certificate is valid.
+
+**Root Cause:** TLS certificate validation requires the connection endpoint (hostname or IP) to match one of the Subject Alternative Names (SAN) in the server certificate. If you connect via IP but the certificate only contains hostnames in its SAN, the handshake fails.
+
+**Example:**
+```bash
+# Certificate SAN contains: DNS:ai-analytics, DNS:localhost, IP:127.0.0.1
+# Client connects to: 10.60.5.76:4317
+# Result: TLS handshake fails (bad record MAC)
+```
+
+**Solution 1: Use Hostname (Recommended)**
+
+Add the collector's hostname to your local hosts file and connect via hostname instead of IP:
+
+**Linux/Mac** (`/etc/hosts`):
+```bash
+sudo bash -c 'echo "10.60.5.76    ai-analytics" >> /etc/hosts'
+```
+
+**Windows** (`C:\Windows\System32\drivers\etc\hosts` - requires Administrator):
+```
+10.60.5.76    ai-analytics
+```
+
+Then update your client `.env`:
+```bash
+# Use hostname instead of IP
+NLM_PROXY_OTEL_ENDPOINT=ai-analytics:4317
+```
+
+**Solution 2: Regenerate Certificate with IP in SAN**
+
+On the remote server, edit `docker/otel/generate-certs.sh` to include the server's IP address:
+
+```bash
+[alt_names]
+DNS.1 = $SERVER_NAME
+DNS.2 = localhost
+DNS.3 = nlm-otel-collector
+IP.1 = 127.0.0.1
+IP.2 = 10.60.5.76    # Add your server's actual IP
+```
+
+Then regenerate certificates and restart:
+```bash
+bash docker/otel/generate-certs.sh
+docker compose -f docker-compose.otel-secure.yml restart otel-collector
+```
+
+Copy the new `ca.crt` to your client machine.
+
+**Solution 3: Skip Certificate Verification (Development Only)**
+
+For HTTP protocol only, you can skip certificate validation:
+
+```bash
+# In client .env
+NLM_PROXY_OTEL_PROTOCOL=http
+NLM_PROXY_OTEL_ENDPOINT=10.60.5.76:4318  # Use port 4318 for HTTP
+NLM_PROXY_OTEL_VERIFY_CERT=false         # Skip cert validation
+```
+
+**Note:** This is less secure and should only be used in development/testing environments.
 
 ### Tracing Not Working
 
