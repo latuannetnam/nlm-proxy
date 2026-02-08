@@ -57,7 +57,7 @@ processors:
 
   # Memory limiter prevents OOM by dropping data when memory usage is high
   memory_limiter:
-    check_interval: 1s
+    check_interval: 30s
     limit_mib: 512
     spike_limit_mib: 128
 
