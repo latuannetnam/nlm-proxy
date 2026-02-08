@@ -12,6 +12,10 @@ services:
       CLICKHOUSE_DB: nlm_traces
       CLICKHOUSE_USER: default
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      # Proxy Configuration
+      HTTP_PROXY: ${HTTP_PROXY-}
+      HTTPS_PROXY: ${HTTPS_PROXY-}
+      NO_PROXY: ${NO_PROXY-}
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 10s
@@ -32,6 +36,11 @@ services:
     env_file:
       # Load environment variables from docker/otel/.env
       - ./docker/otel/.env
+    environment:
+      # Proxy Configuration
+      HTTP_PROXY: ${HTTP_PROXY-}
+      HTTPS_PROXY: ${HTTPS_PROXY-}
+      NO_PROXY: ${NO_PROXY-}
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     depends_on:
       clickhouse:
@@ -45,6 +54,10 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      # Proxy Configuration
+      HTTP_PROXY: ${HTTP_PROXY-}
+      HTTPS_PROXY: ${HTTPS_PROXY-}
+      NO_PROXY: ${NO_PROXY-}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
