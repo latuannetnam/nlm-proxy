@@ -1,7 +1,9 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress
-- [ ] **MS Teams chatbot integration**
+- [ ] **MS Teams chatbot integration**: docs\plans\notebooklm-chatbot-design.md
+- [ ] ** Notebook ACL**: Limit notebooks to query based on ACL (for example AD group): docs\plans\per-request-acl-specification.md
+- [ ] **Scalability**: Loadbalancing request to multiple NotebookLM account (each Pro account has maximum 500 chat request/day): docs\plans\nlm-proxy-account-pool-specification.md
 - [ ] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks
 - [ ] **Pre-processing**: Use LLM task to pre-process in individual notebook models
 - [ ] **Authentication**: Support multiple authentication profiles
