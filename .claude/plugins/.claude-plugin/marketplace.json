@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "nlm-proxy-plugins",
+  "description": "Custom Claude Code plugins for the nlm-proxy project",
+  "owner": {
+    "name": "nlm-proxy team",
+    "email": "latuannetnam@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "update-nlm-proxy-docs",
+      "description": "Automatic documentation update system for NLM Proxy. Analyzes git changes and proposes updates to project-specific docs (TRACING.md, smart-routing-architecture.md, etc.).",
+      "version": "1.0.0",
+      "author": {
+        "name": "nlm-proxy team",
+        "email": "latuannetnam@gmail.com"
+      },
+      "source": "./plugins/update-nlm-proxy-docs",
+      "category": "productivity"
+    }
+  ]
+}

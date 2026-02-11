@@ -22,6 +22,9 @@ nlm-proxy serve openai --port 8080  # OpenAI proxy
 nlm-proxy auth extract           # Extract auth tokens
 nlm-proxy auth test              # Verify authentication
 uv run pytest                    # Run tests
+
+**Documentation:**
+/update-nlm-proxy-docs           # Auto-analyze changes & update docs
 ```
 
 **Reinstall after changes:**
