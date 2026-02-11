@@ -44,6 +44,7 @@ POST /v1/chat/completions
 - If `metadata.allowed_notebooks` is provided, Smart Router only considers those notebooks
 - If `metadata.allowed_notebooks` is `null` or not provided, all cached notebooks are considered (existing behavior)
 - If `metadata.allowed_notebooks` is an empty list `[]`, returns "No accessible notebooks" error
+- If `metadata.allowed_notebooks` is an wildcast `[*]`, all cached notebooks are considered (existing behavior)
 - Filtering happens AFTER cache lookup, so all notebooks remain cached for other users
 
 ### Architecture

@@ -1,6 +1,7 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress
+- [ ] update-docs agent skill: Auto update docs when finish task
 - [ ] **MS Teams chatbot integration**: docs\plans\notebooklm-chatbot-design.md
 - [ ] ** Notebook ACL**: Limit notebooks to query based on ACL (for example AD group): docs\plans\per-request-acl-specification.md
 - [ ] **Scalability**: Loadbalancing request to multiple NotebookLM account (each Pro account has maximum 500 chat request/day): docs\plans\nlm-proxy-account-pool-specification.md
