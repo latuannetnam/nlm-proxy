@@ -286,6 +286,28 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
     logger.debug(f"[SMART-ROUTER] Extracted chat_id: {chat_id}")
 
+    # Extract allowed_notebooks from request metadata for per-request ACL filtering
+    request_allowed_notebooks = None
+    if hasattr(request, 'metadata') and request.metadata:
+        allowed_notebooks_raw = request.metadata.get("allowed_notebooks")
+        if allowed_notebooks_raw is not None:
+            # Handle wildcard: ["*"] means all notebooks (same as None)
+            if allowed_notebooks_raw == ["*"]:
+                request_allowed_notebooks = None
+                logger.debug("[SMART-ROUTER] ACL wildcard ['*'] - all notebooks allowed")
+            # Empty list means no notebooks allowed (will be rejected by router)
+            elif allowed_notebooks_raw == []:
+                request_allowed_notebooks = []
+                logger.debug("[SMART-ROUTER] ACL empty list [] - no notebooks allowed")
+            # Specific list of notebook IDs
+            else:
+                request_allowed_notebooks = allowed_notebooks_raw
+                logger.debug(f"[SMART-ROUTER] ACL filter: {len(request_allowed_notebooks)} allowed notebooks")
+        else:
+            logger.debug("[SMART-ROUTER] No ACL metadata - all notebooks allowed")
+    else:
+        logger.debug("[SMART-ROUTER] No metadata - all notebooks allowed")
+
     # Load existing conversation_id from session store if chat_id exists
     if chat_id and app.state.session_store:
         stored_conv_id = app.state.session_store.get(chat_id)
@@ -306,7 +328,7 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 raise HTTPException(status_code=400, detail="No user message found")
 
             query = user_messages[-1].content
-            decision = await router.route(query)
+            decision = await router.route(query, allowed_notebooks=request_allowed_notebooks)
 
             logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
 
@@ -333,7 +355,7 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
             if tracing_settings.request_max_length > 0:
                 add_span_attributes(user_query=query[:tracing_settings.request_max_length])
 
-            decision = await router.route(query)
+            decision = await router.route(query, allowed_notebooks=request_allowed_notebooks)
 
             logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
 

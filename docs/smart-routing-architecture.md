@@ -471,6 +471,147 @@ NLM_PROXY_ROUTING_SOURCE_SUMMARY_MAX_CHARS=80
 NLM_PROXY_ROUTING_SOURCE_DESCRIPTIONS_MAX_SOURCES=10
 ```
 
+## Per-Request ACL Filtering
+
+The smart router supports **per-request access control lists (ACL)** to restrict which notebooks a user can access based on their permissions. This enables multi-tenant scenarios where different users have access to different subsets of notebooks.
+
+### Two-Layer Filtering Architecture
+
+```
+Layer 1 (Server-Wide Cache): NLM_PROXY_ROUTING_ALLOWED_NOTEBOOKS env var
+    → Controls which notebooks get cached at all (server-wide)
+    → Applied at cache initialization
+
+Layer 2 (Per-Request ACL): metadata.allowed_notebooks in request body
+    → Filters cached notebooks for each individual request
+    → Applied during notebook selection
+```
+
+These layers compose naturally: the cache holds only server-allowed notebooks, and per-request ACL further restricts access per user.
+
+### Usage
+
+Send `allowed_notebooks` in the request metadata to restrict notebook access:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="your-api-key"
+)
+
+response = client.chat.completions.create(
+    model="knowledge-finder",
+    messages=[{"role": "user", "content": "What's in my research notes?"}],
+    extra_body={
+        "metadata": {
+            "allowed_notebooks": ["nb-abc-123", "nb-def-456"]
+        }
+    }
+)
+```
+
+### ACL Behavior
+
+| Scenario | `metadata.allowed_notebooks` | Behavior |
+|----------|------------------------------|----------|
+| No metadata | (missing) | All cached notebooks accessible |
+| Null value | `null` | All cached notebooks accessible |
+| Wildcard | `["*"]` | All cached notebooks accessible (normalized to null) |
+| Specific IDs | `["nb-1", "nb-2"]` | Only `nb-1` and `nb-2` considered for selection |
+| Empty list | `[]` | Returns error: "No accessible notebooks for this user" |
+| Non-matching IDs | `["nb-999"]` | Returns error if no IDs match cached notebooks |
+
+**Important Notes:**
+- ACL filtering **only applies to NOTEBOOKLM requests**. LLM_TASK classifications bypass ACL filtering entirely.
+- The router returns an error message instead of falling back to external LLM when ACL blocks all notebooks. This prevents unauthorized access.
+- ACL is enforced during notebook selection—the LLM classification step is not affected.
+
+### Integration Example (Azure AD Groups)
+
+```python
+# Example: knowledge-finder-bot backend
+# Maps Azure AD group membership to allowed notebooks
+
+# User's AD groups from authentication
+user_groups = ["engineering", "research"]
+
+# Map groups to notebook IDs (server-side configuration)
+GROUP_TO_NOTEBOOKS = {
+    "engineering": ["nb-eng-docs", "nb-api-specs"],
+    "research": ["nb-ml-papers", "nb-experiments"],
+    "leadership": ["*"]  # Wildcard: access all
+}
+
+# Resolve allowed notebooks for this user
+allowed_notebooks = []
+for group in user_groups:
+    notebooks = GROUP_TO_NOTEBOOKS.get(group, [])
+    if "*" in notebooks:
+        allowed_notebooks = ["*"]  # Wildcard takes precedence
+        break
+    allowed_notebooks.extend(notebooks)
+
+# Send to nlm-proxy
+response = client.chat.completions.create(
+    model="knowledge-finder",
+    messages=[{"role": "user", "content": user_query}],
+    extra_body={
+        "metadata": {
+            "allowed_notebooks": allowed_notebooks
+        }
+    }
+)
+```
+
+### OpenTelemetry Attributes
+
+ACL filtering adds the following span attributes to `smart_router.select_notebook`:
+
+| Attribute | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `acl_filter_applied` | `bool` | Whether ACL filtering was active | `true` |
+| `acl_allowed_count` | `int` | Number of notebook IDs in ACL | `3` |
+| `acl_matched_count` | `int` | Number of notebooks that passed ACL filter | `2` |
+| `candidates_count` | `int` | Final number of notebooks after ACL filtering | `2` |
+
+**Example trace query (ClickHouse):**
+
+```sql
+-- Count ACL rejections (no accessible notebooks)
+SELECT
+    count() as rejection_count,
+    SpanAttributes['acl_allowed_count'] as allowed_count
+FROM nlm_traces.routing_traces
+WHERE SpanName = 'smart_router.select_notebook'
+  AND SpanAttributes['acl_matched_count'] = '0'
+GROUP BY allowed_count;
+
+-- Average ACL filtering effectiveness
+SELECT
+    avg(toInt32(SpanAttributes['acl_matched_count'])) as avg_matched,
+    avg(toInt32(SpanAttributes['acl_allowed_count'])) as avg_allowed
+FROM nlm_traces.routing_traces
+WHERE SpanName = 'smart_router.select_notebook'
+  AND SpanAttributes['acl_filter_applied'] = 'true';
+```
+
+### Logging
+
+ACL filtering produces debug logs for troubleshooting:
+
+```
+DEBUG [SMART-ROUTER] ACL filter: 2 allowed notebooks
+DEBUG [ROUTER] ACL filter applied: 5 → 2 notebooks (allowed: ['nb-abc-123', 'nb-def-456'])
+```
+
+When ACL blocks all notebooks:
+
+```
+WARN [ROUTER] No accessible notebooks for this user (ACL: ['nb-999'])
+```
+
 ## Logging Tags
 
 The smart routing feature uses specific logging tags for debugging:

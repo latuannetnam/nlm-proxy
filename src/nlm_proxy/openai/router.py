@@ -98,7 +98,7 @@ class SmartRouter:
         return RequestType.LLM_TASK
 
     @record_span("smart_router.select_notebook")
-    async def select_notebook(self, query: str) -> tuple[str | None, str]:
+    async def select_notebook(self, query: str, allowed_notebooks: list[str] | None = None) -> tuple[str | None, str]:
         """Select best notebook for query. Returns (notebook_id, reasoning)."""
         logger.debug(f"[ROUTER] Selecting notebook for query: {query[:100]}...")
         notebooks = await self._ensure_notebooks_cached()
@@ -107,6 +107,25 @@ class SmartRouter:
             logger.warning("[ROUTER] No notebooks available for selection")
             add_span_attributes(candidates_count=0)
             return None, "No notebooks available"
+
+        # Apply per-request ACL filtering if provided
+        if allowed_notebooks is not None:
+            original_count = len(notebooks)
+            original_ids_with_names = [f"{nb.id} ({nb.title})" for nb in notebooks]
+            notebooks = [nb for nb in notebooks if nb.id in allowed_notebooks]
+            add_span_attributes(
+                acl_filter_applied=True,
+                acl_allowed_count=len(allowed_notebooks),
+                acl_matched_count=len(notebooks)
+            )
+            logger.debug(f"[ROUTER] ACL filter applied: {original_count} → {len(notebooks)} notebooks | cached: {original_ids_with_names} | allowed: {allowed_notebooks}")
+
+            if not notebooks:
+                logger.warning(f"[ROUTER] No accessible notebooks for this user | cached: {original_ids_with_names} | allowed: {allowed_notebooks}")
+                add_span_attributes(candidates_count=0)
+                return None, "No accessible notebooks for this user"
+        else:
+            add_span_attributes(acl_filter_applied=False)
 
         add_span_attributes(candidates_count=len(notebooks))
 
@@ -208,7 +227,7 @@ class SmartRouter:
         return None, "No suitable notebook found"
 
     @record_span("smart_router.route")
-    async def route(self, query: str) -> RoutingDecision:
+    async def route(self, query: str, allowed_notebooks: list[str] | None = None) -> RoutingDecision:
         """Classify and route the request."""
         logger.info(f"[ROUTER] Starting routing for query: {query[:50]}...")
         # user_query attribute moved to smart_router.handle_request span
@@ -226,7 +245,7 @@ class SmartRouter:
                 reasoning="Classified as LLM task (not a notebook query)"
             )
 
-        notebook_id, reasoning = await self.select_notebook(query)
+        notebook_id, reasoning = await self.select_notebook(query, allowed_notebooks)
         logger.info(f"[ROUTER] Routing to NotebookLM: {notebook_id}")
         add_span_attributes(
             request_type="NOTEBOOKLM",
