@@ -2,119 +2,82 @@
 
 ## Project Overview
 
-**NotebookLM MCP Server**
+**NLM Proxy** — OpenAI-compatible proxy for NotebookLM. Provides programmatic access to NotebookLM (notebooklm.google.com) via MCP server and OpenAI-compatible REST API. Features smart routing that automatically classifies requests and routes them to NotebookLM (knowledge queries) or external LLM (general tasks). Tested with personal/free tier accounts. Relies on internal `batchexecute` RPCs.
 
-This project implements a Model Context Protocol (MCP) server that provides programmatic access to [NotebookLM](https://notebooklm.google.com). It allows AI agents and developers to interact with NotebookLM notebooks, sources, and query capabilities.
+## Rules
 
-Tested with personal/free tier accounts. May work with Google Workspace accounts but has not been tested. This project relies on internal APIs (`batchexecute` RPCs).
+- After planning for new features, always write plan to `docs/plans/` folder
+- **ALWAYS** update following important documents with appropriate contents after implementing new features, fixing bugs, or making important changes to code:
+  + `README.md`
+  + `docs/smart-routing-architecture.md`
+  + `docs/TRACING.md`
+  + `.env.example`
+  + `GEMINI.md`
 
-## Environment & Setup
+## Quick Commands
 
-The project uses `uv` for dependency management and tool installation.
-
-### Prerequisites
-- Python 3.11+
-- `uv` (Universal Python Package Manager)
-- Google Chrome (for automated authentication)
-
-### Installation
-
-**From PyPI (Recommended):**
 ```bash
-uv tool install notebooklm-mcp-server
-# or: pip install notebooklm-mcp-server
+# === Installation ===
+uv pip install -e ".[all]"              # Install with all extras
+uv cache clean && uv tool install ".[all]" --force  # Reinstall after changes
+
+# === MCP Server ===
+nlm-proxy serve mcp                     # Run MCP server
+nlm-proxy serve mcp --debug             # With debug logging
+
+# === OpenAI Proxy ===
+nlm-proxy serve openai --port 8080      # OpenAI-compatible proxy
+
+# === Authentication ===
+nlm-proxy auth extract                  # Extract auth tokens (recommended)
+nlm-proxy auth test                     # Verify authentication
+
+# === Testing ===
+uv run pytest                           # Run all tests
+
+# === Tracing Infrastructure ===
+docker compose -f docker-compose.otel.yml up -d  # Start basic stack (dev)
+docker compose -f docker-compose.otel-secure.yml up -d  # Secure stack (prod)
+open http://localhost:3000  # Grafana dashboard (admin/admin)
 ```
 
-**From Source (Development):**
-```bash
-git clone https://github.com/YOUR_USERNAME/notebooklm-mcp.git
-cd notebooklm-mcp
-uv tool install .
-```
+**Workflows:**
+- `/update-nlm-proxy-docs` — Auto-analyze changes & update docs
 
-## Authentication
+## Memory Modules
 
-**Preferred: Run the automated authentication CLI:**
-```bash
-notebooklm-mcp-auth
-```
-This launches Chrome, you log in, and cookies are extracted automatically. Your login is saved to a Chrome profile for future use.
+Detailed documentation in `.agent/memory/`:
 
-**Auto-refresh (v0.1.9+):**
-The server now automatically handles token expiration:
-1. Refreshes CSRF tokens on expiry (immediate)
-2. Reloads cookies from disk if updated externally
-3. Runs headless Chrome auth if profile has saved login
+| Module | When to Read |
+|--------|--------------|
+| `architecture.md` | Understanding codebase structure, key components |
+| `commands.md` | Full command reference, from-source execution |
+| `configuration.md` | Environment variables, .env files, settings precedence |
+| `authentication.md` | Auth issues, setting up tokens |
+| `mcp-tools.md` | MCP tool reference, confirmation rules |
+| `openai-proxy.md` | OpenAI proxy setup, SDK examples |
+| `smart-routing.md` | Smart routing configuration, LLM client, router |
+| `logging.md` | Configuring logs, debugging |
+| `tracing.md` | OpenTelemetry tracing setup, TLS/auth configuration, known issues |
+| `troubleshooting.md` | Common errors and fixes |
 
-If headless auth fails (Google login fully expired), you'll see a message to run `notebooklm-mcp-auth` again.
+## References
 
-**Explicit refresh (MCP tool):**
-```
-refresh_auth()  # Reload tokens from disk or run headless auth
-```
+| Document | When to Read |
+|----------|--------------|
+| `docs/API_REFERENCE.md` | Debugging APIs, adding features, RPC details |
+| `docs/ASYNCIO_THREADING_PITFALLS.md` | Asyncio + threading bugs, "Event loop is closed" errors |
+| `docs/TRACING.md` | Setting up tracing, TLS/auth configuration, troubleshooting collector issues |
+| `docs/smart-routing-architecture.md` | Understanding smart routing architecture and flow diagrams |
 
-**Fallback: Manual extraction (if CLI fails)**
-If the automated tool doesn't work, extract cookies via Chrome DevTools:
-1. Open Chrome DevTools on notebooklm.google.com
-2. Go to Network tab, find a batchexecute request
-3. Copy the Cookie header and call `save_auth_tokens(cookies=...)`
+## Contributing
 
-**Environment variable (advanced):**
-```bash
-export NOTEBOOKLM_COOKIES="SID=xxx; HSID=xxx; SSID=xxx; ..."
-```
+1. Capture network request with Chrome DevTools
+2. Document RPC ID in `docs/API_REFERENCE.md`
+3. Add method to `core/client.py`
+4. Add tool in `mcp/server.py`
+5. Add test case to `docs/MCP_TEST_PLAN.md`
 
-Cookies last for weeks. The server auto-refreshes as long as Chrome profile login is valid.
+## License
 
-## Development Workflow
-
-### Building and Running
-
-**Reinstalling after changes:**
-Because `uv tool install` installs into an isolated environment, you must reinstall to see changes during development.
-```bash
-uv cache clean
-uv tool install --force .
-```
-
-**Running the Server:**
-**Running the Server:**
-```bash
-# Standard mode (stdio)
-notebooklm-mcp
-
-# Debug mode (verbose logging)
-notebooklm-mcp --debug
-
-# HTTP Server mode
-notebooklm-mcp --transport http --port 8000
-```
-
-### Testing
-
-Run the test suite using `pytest` via `uv`:
-```bash
-# Run all tests
-uv run pytest
-
-# Run a specific test file
-uv run pytest tests/test_api_client.py
-```
-
-## Project Structure
-
-- `src/notebooklm_mcp/`
-    - `server.py`: Main entry point. Defines the MCP server and tools.
-    - `api_client.py`: The core logic. Contains the internal API calls.
-    - `constants.py`: Single source of truth for all API code-name mappings.
-    - `auth.py`: Handles token validation, storage, and loading.
-    - `auth_cli.py`: Implementation of the `notebooklm-mcp-auth` CLI.
-- `CLAUDE.md`: Contains detailed documentation on the internal RPC IDs and protocol specifics. **Refer to this file for API deep dives.**
-- `pyproject.toml`: Project configuration and dependencies.
-
-## Key Conventions
-
-- **Internal APIs:** This project relies on undocumented APIs. Changes to Google's internal API will break functionality.
-- **RPC Protocol:** The API uses Google's `batchexecute` protocol. Responses often contain "anti-XSSI" prefixes (`)]}'`) that must be stripped.
-- **Tools:** New features should be exposed as MCP tools in `server.py`.
-- **Constants:** All code-name mappings should be defined in `constants.py` using the `CodeMapper` class.
+MIT License
