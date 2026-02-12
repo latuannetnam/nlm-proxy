@@ -1,7 +1,8 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress
-
+- [ ] Enhance conversation management
+- [ ] Migrate Claude memory to Antigravity
 - [ ] **Scalability**: Loadbalancing request to multiple NotebookLM account (each Pro account has maximum 500 chat request/day): docs\plans\nlm-proxy-account-pool-specification.md
 - [ ] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks
 - [ ] **Pre-processing**: Use LLM task to pre-process in individual notebook models

@@ -203,10 +203,11 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
                 new_conv_id = chunk.get("conversation_id")
                 if new_conv_id and not conversation_id:
                     conversation_id = new_conv_id
+                    logger.info(f"conversation_id_from_nlm: conversation_id={conversation_id}, notebook_id={decision.notebook_id}")
                     # Save to session store if we have a chat_id
                     if chat_id and app.state.session_store:
                         app.state.session_store.set(chat_id, conversation_id)
-                        logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conversation_id}")
+                        logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conversation_id}")
 
                 if chunk_type == "thinking" and not request.include_thinking:
                     previous_thinking = full_text
@@ -221,7 +222,8 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
                             id=chunk_id,
                             created=created,
                             model=request.model,
-                            choices=[Choice(delta=delta)]
+                            choices=[Choice(delta=delta)],
+                            system_fingerprint=f"conv_{conversation_id}" if conversation_id else None,
                         )
                         yield f"data: {openai_chunk.model_dump_json()}\n\n"
                 else:
@@ -234,7 +236,8 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
                             id=chunk_id,
                             created=created,
                             model=request.model,
-                            choices=[Choice(delta=delta)]
+                            choices=[Choice(delta=delta)],
+                            system_fingerprint=f"conv_{conversation_id}" if conversation_id else None,
                         )
                         yield f"data: {openai_chunk.model_dump_json()}\n\n"
 
@@ -248,7 +251,8 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
             id=chunk_id,
             created=created,
             model=request.model,
-            choices=[Choice(delta=DeltaContent(), finish_reason="stop")]
+            choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
+            system_fingerprint=f"conv_{conversation_id}" if conversation_id else None,
         )
         yield f"data: {final_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
@@ -281,10 +285,11 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
     # Extract chat_id from headers or request metadata
     chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
+    chat_id_source = "header" if chat_id else None
     if not chat_id and hasattr(request, 'metadata') and request.metadata:
         chat_id = request.metadata.get("chat_id")
-
-    logger.debug(f"[SMART-ROUTER] Extracted chat_id: {chat_id}")
+        if chat_id:
+            chat_id_source = "metadata"
 
     # Extract allowed_notebooks from request metadata for per-request ACL filtering
     request_allowed_notebooks = None
@@ -312,10 +317,10 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
     if chat_id and app.state.session_store:
         stored_conv_id = app.state.session_store.get(chat_id)
         if stored_conv_id:
-            logger.info(f"[SMART-ROUTER] Reusing conversation: chat_id={chat_id}, conversation_id={stored_conv_id}")
+            logger.info(f"session_lookup: chat_id={chat_id}, conversation_id={stored_conv_id}, source={chat_id_source}")
             request.conversation_id = stored_conv_id
         else:
-            logger.info(f"[SMART-ROUTER] New conversation for chat_id={chat_id}")
+            logger.info(f"session_lookup: chat_id={chat_id}, conversation_id=None, source={chat_id_source}")
 
     # For streaming requests, the generator owns the span (so it lives for full duration)
     # For non-streaming, we create the span here
@@ -380,7 +385,9 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 conv_id = result.get("conversation_id", "") if result else ""
                 if chat_id and conv_id and app.state.session_store:
                     app.state.session_store.set(chat_id, conv_id)
-                    logger.debug(f"[SMART-ROUTER] Saved session: chat_id={chat_id}, conversation_id={conv_id}")
+                    logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conv_id}")
+                elif chat_id and not conv_id:
+                    logger.info(f"session_not_saved: chat_id={chat_id}, reason=no_conversation_id_from_nlm")
 
             # Add response to trace
             if tracing_settings.response_max_length > 0:
@@ -406,7 +413,8 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                     prompt_tokens=len(query),
                     completion_tokens=len(response_text),
                     total_tokens=len(query) + len(response_text)
-                )
+                ),
+                system_fingerprint=f"conv_{request.conversation_id}" if request.conversation_id else None,
             )
         finally:
             await router.close()
@@ -447,9 +455,11 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
             new_conv_id = chunk.get("conversation_id")
             if new_conv_id and not conversation_id:
                 conversation_id = new_conv_id
+                logger.info(f"conversation_id_from_nlm: conversation_id={conversation_id}, notebook_id={notebook_id}")
                 # Save to session store if we have a chat_id
                 if chat_id and app.state.session_store:
                     app.state.session_store.set(chat_id, conversation_id)
+                    logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conversation_id}")
 
             # Compute delta: NotebookLM sends cumulative text, we need only the new part
             if chunk_type == "thinking":
@@ -498,42 +508,35 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
 @app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
 async def chat_completions(request: ChatCompletionRequest, http_request: Request):
     """OpenAI-compatible chat completions endpoint."""
-    logger.debug(f"[PROXY] Received request: POST /v1/chat/completions")
-    logger.debug(f"[PROXY] Request params: model={request.model}, stream={request.stream}, messages={len(request.messages)}, conversation_id={request.conversation_id}, include_thinking={request.include_thinking}")
-
     # Check if using smart router
     routing_settings = get_routing_settings()
     if request.model == routing_settings.router_model_name:
         return await handle_smart_routing(request, http_request)
 
-    # Log all headers for debugging
-    logger.debug(f"[DEBUG] HTTP Headers: {dict(http_request.headers)}")
-
-    # Log request metadata
-    logger.debug(f"[DEBUG] Request has metadata attr: {hasattr(request, 'metadata')}")
-    logger.debug(f"[DEBUG] Request.metadata value: {request.metadata}")
-    logger.debug(f"[DEBUG] Request.metadata type: {type(request.metadata)}")
-
     # Extract chat_id from headers or request metadata
     chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
-    logger.debug(f"[DEBUG] chat_id from header: {chat_id}")
-
+    chat_id_source = "header" if chat_id else None
     if not chat_id and hasattr(request, 'metadata') and request.metadata:
         chat_id = request.metadata.get("chat_id")
-        logger.debug(f"[DEBUG] chat_id from metadata: {chat_id}")
+        if chat_id:
+            chat_id_source = "metadata"
 
-    logger.debug(f"[SESSION] Extracted chat_id: {chat_id}")
+    logger.info(
+        f"request_received: model={request.model}, chat_id={chat_id}, "
+        f"conversation_id={request.conversation_id}, stream={request.stream}, "
+        f"has_metadata={request.metadata is not None}"
+    )
 
     # Load existing conversation_id from session store if chat_id exists
     if chat_id and app.state.session_store:
         stored_conv_id = app.state.session_store.get(chat_id)
         if stored_conv_id:
-            logger.info(f"[SESSION] Reusing conversation: chat_id={chat_id}, conversation_id={stored_conv_id}")
+            logger.info(f"session_lookup: chat_id={chat_id}, conversation_id={stored_conv_id}, source={chat_id_source}")
             request.conversation_id = stored_conv_id
         else:
-            logger.info(f"[SESSION] New conversation for chat_id={chat_id}")
+            logger.info(f"session_lookup: chat_id={chat_id}, conversation_id=None, source={chat_id_source}")
     elif not chat_id:
-        logger.debug("[SESSION] No chat_id found, using manual conversation_id mode")
+        logger.debug("session_lookup: chat_id=None, using manual conversation_id mode")
 
     user_messages = [m for m in request.messages if m.role == "user"]
     if not user_messages:
@@ -568,6 +571,9 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         # Save conversation_id to session store if we have a chat_id
         if chat_id and conv_id and app.state.session_store:
             app.state.session_store.set(chat_id, conv_id)
+            logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conv_id}")
+        elif chat_id and not conv_id:
+            logger.info(f"session_not_saved: chat_id={chat_id}, reason=no_conversation_id_from_nlm")
 
         logger.debug(f"[NOTEBOOKLM] Response received: answer_len={len(answer)}, conversation_id={conv_id}")
         logger.debug(f"[NOTEBOOKLM] Answer preview: {answer[:200]}{'...' if len(answer) > 200 else ''}")
