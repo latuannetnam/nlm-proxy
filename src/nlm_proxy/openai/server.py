@@ -11,7 +11,8 @@ from fastapi.responses import StreamingResponse
 
 from nlm_proxy.core import NotebookLMClient
 from nlm_proxy.core.auth import load_cached_tokens
-from nlm_proxy.core.config import get_openai_settings, get_routing_settings, get_tracing_settings
+from nlm_proxy.core.auth_refresh import AuthRefreshService
+from nlm_proxy.core.config import get_auth_settings, get_openai_settings, get_routing_settings, get_tracing_settings
 from nlm_proxy.core.logging import get_logger
 from nlm_proxy.core.tracing import init_tracing, shutdown_tracing, instrument_fastapi, instrument_httpx, get_tracer, add_span_attributes
 from nlm_proxy.openai.notebook_cache import NotebookCache
@@ -40,6 +41,8 @@ app = FastAPI(
 app.state.session_store = None
 # Initialize notebook cache for smart routing (will be configured in main())
 app.state.notebook_cache = None
+# Initialize auth refresh service (will be configured in main())
+app.state.auth_refresh_service = None
 
 
 def verify_api_key(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -682,6 +685,18 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     else:
         logger.debug("Smart routing not configured (no llm_api_key) - notebook cache not initialized")
 
+    # Start background auth refresh service
+    auth_settings = get_auth_settings()
+    if auth_settings.auto_refresh_enabled:
+        app.state.auth_refresh_service = AuthRefreshService(
+            csrf_refresh_interval=auth_settings.csrf_refresh_interval,
+            cookie_refresh_interval=auth_settings.cookie_refresh_interval,
+            headless_port=auth_settings.headless_port,
+        )
+        app.state.auth_refresh_service.start()
+    else:
+        logger.info("[AUTH_REFRESH] Auto-refresh disabled (NLM_PROXY_AUTH_AUTO_REFRESH_ENABLED=false)")
+
     import uvicorn
 
     # Logging is now configured centrally via setup_logging() in cli.py
@@ -691,6 +706,9 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     finally:
         # Shutdown tracing with timeout to prevent hanging on exit
         shutdown_tracing(timeout_seconds=3)
+        # Stop auth refresh service
+        if app.state.auth_refresh_service:
+            app.state.auth_refresh_service.stop()
         # Cleanup notebook cache on shutdown
         if app.state.notebook_cache:
             app.state.notebook_cache.shutdown()

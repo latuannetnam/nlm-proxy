@@ -24,6 +24,7 @@ from .auth import (
 )
 from .client import NotebookLMClient, Notebook, ConversationTurn, SOURCE_ADD_TIMEOUT
 from .llm_client import ExternalLLMClient
+from .auth_refresh import AuthRefreshService, refresh_csrf_once, refresh_cookies_once
 
 __all__ = [
     # Config
@@ -58,4 +59,8 @@ __all__ = [
     "SOURCE_ADD_TIMEOUT",
     # External LLM Client
     "ExternalLLMClient",
+    # Auth refresh service
+    "AuthRefreshService",
+    "refresh_csrf_once",
+    "refresh_cookies_once",
 ]

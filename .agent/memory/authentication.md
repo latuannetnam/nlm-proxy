@@ -60,10 +60,32 @@ CSRF token and session ID are auto-extracted.
 nlm-proxy auth test
 ```
 
-## Token Expiration
+## Token Expiration & Auto-Refresh
 
-- **Cookies**: Stable for weeks
-- **CSRF/Session**: Auto-refreshed on client init
-- **Chrome profile**: Persists Google login
+- **Cookies**: Stable for weeks (Google caps at 400 days)
+- **CSRF/Session**: Auto-refreshed on client init and every 30 min (background)
+- **Chrome profile**: Persists Google login for headless cookie refresh
 
-Re-extract cookies when API calls fail with auth errors.
+### Background Auto-Refresh (default: enabled)
+
+When running `nlm-proxy serve mcp` or `nlm-proxy serve openai`, a background
+`AuthRefreshService` automatically refreshes tokens:
+- **CSRF/Session**: every 30 min (re-fetches NotebookLM homepage)
+- **Cookies**: every 6 h via headless Chrome (requires saved Chrome profile)
+
+Configure via env vars: `NLM_PROXY_AUTH_CSRF_REFRESH_INTERVAL`,
+`NLM_PROXY_AUTH_COOKIE_REFRESH_INTERVAL`, `NLM_PROXY_AUTH_AUTO_REFRESH_ENABLED`.
+
+### Manual Refresh
+
+```bash
+nlm-proxy auth refresh          # Quick: refresh CSRF + session (~2s)
+nlm-proxy auth refresh --full   # Full: CSRF + cookies via headless Chrome (~10s)
+```
+
+Re-extract cookies when API calls fail with auth errors and `auth refresh`
+does not help (Google session fully expired):
+
+```bash
+nlm-proxy auth extract          # Re-login via Chrome
+```

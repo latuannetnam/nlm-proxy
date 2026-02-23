@@ -13,6 +13,8 @@ from starlette.responses import JSONResponse
 
 from nlm_proxy.core import NotebookLMClient, load_cached_tokens, AuthTokens, save_tokens_to_cache, get_cache_path
 from nlm_proxy.core import constants
+from nlm_proxy.core.auth_refresh import AuthRefreshService
+from nlm_proxy.core.config import get_auth_settings
 from nlm_proxy.core.logging import get_logger
 from nlm_proxy import __version__
 
@@ -2066,32 +2068,50 @@ def main(debug: bool = False, transport: str = "stdio", port: int = 8000):
     if debug:
         mcp_logger.debug("Debug logging: ENABLED (MCP tool calls + NotebookLM API requests/responses)")
 
-    if transport == "http":
-        print(f"Starting NotebookLM MCP server (HTTP) on http://{host}:{port}{path}")
-        print(f"Health check: http://{host}:{port}/health")
-        if stateless:
-            print("Stateless mode: ENABLED (suitable for horizontal scaling)")
-        mcp.run(
-            transport="http",
-            host=host,
-            port=port,
-            path=path,
-            stateless_http=stateless,
+    # Start background auth refresh service
+    auth_settings = get_auth_settings()
+    auth_refresh_service: AuthRefreshService | None = None
+    if auth_settings.auto_refresh_enabled:
+        auth_refresh_service = AuthRefreshService(
+            csrf_refresh_interval=auth_settings.csrf_refresh_interval,
+            cookie_refresh_interval=auth_settings.cookie_refresh_interval,
+            headless_port=auth_settings.headless_port,
         )
-    elif transport == "sse":
-        print(f"Starting NotebookLM MCP server (SSE) on http://{host}:{port}/sse")
-        print(f"Health check: http://{host}:{port}/health")
-        if stateless:
-            print("Stateless mode: ENABLED (suitable for horizontal scaling)")
-        mcp.run(
-            transport="sse",
-            host=host,
-            port=port,
-            stateless_http=stateless,
-        )
+        auth_refresh_service.start()
     else:
-        # Default: stdio transport (no message - stdio should be silent)
-        mcp.run()
+        mcp_logger.info("[AUTH_REFRESH] Auto-refresh disabled (NLM_PROXY_AUTH_AUTO_REFRESH_ENABLED=false)")
+
+    try:
+        if transport == "http":
+            print(f"Starting NotebookLM MCP server (HTTP) on http://{host}:{port}{path}")
+            print(f"Health check: http://{host}:{port}/health")
+            if stateless:
+                print("Stateless mode: ENABLED (suitable for horizontal scaling)")
+            mcp.run(
+                transport="http",
+                host=host,
+                port=port,
+                path=path,
+                stateless_http=stateless,
+            )
+        elif transport == "sse":
+            print(f"Starting NotebookLM MCP server (SSE) on http://{host}:{port}/sse")
+            print(f"Health check: http://{host}:{port}/health")
+            if stateless:
+                print("Stateless mode: ENABLED (suitable for horizontal scaling)")
+            mcp.run(
+                transport="sse",
+                host=host,
+                port=port,
+                stateless_http=stateless,
+            )
+        else:
+            # Default: stdio transport (no message - stdio should be silent)
+            mcp.run()
+    finally:
+        # Stop auth refresh service on shutdown
+        if auth_refresh_service:
+            auth_refresh_service.stop()
 
     return 0
 

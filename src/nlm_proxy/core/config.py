@@ -107,12 +107,31 @@ class AuthSettings(BaseSettings):
     chrome_port: int = Field(default=9222, description="Chrome DevTools port")
     auto_launch: bool = Field(default=True, description="Auto-launch Chrome for auth")
 
+    # Auto-refresh service settings
+    auto_refresh_enabled: bool = Field(
+        default=True,
+        description="Enable background auth token auto-refresh service",
+    )
+    csrf_refresh_interval: int = Field(
+        default=1800,
+        description="Seconds between background CSRF/session token refreshes (default: 30 min)",
+    )
+    cookie_refresh_interval: int = Field(
+        default=21600,
+        description="Seconds between background cookie refreshes via headless Chrome (default: 6 h)",
+    )
+    headless_port: int = Field(
+        default=9223,
+        description="Chrome DevTools port for headless auth (keep separate from chrome_port to avoid conflicts)",
+    )
+
     model_config = SettingsConfigDict(
         env_prefix="NLM_PROXY_AUTH_",
         env_file=_get_env_files(),
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
 
 
 class SmartRoutingSettings(BaseSettings):

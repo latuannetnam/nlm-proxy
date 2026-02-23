@@ -315,9 +315,23 @@ def has_chrome_profile() -> bool:
     indicating that the user has previously authenticated.
     """
     profile_dir = Path.home() / ".notebooklm-mcp" / "chrome-profile"
-    # Check for Cookies file which indicates the profile has been used
-    cookies_file = profile_dir / "Default" / "Cookies"
-    return cookies_file.exists()
+    if not profile_dir.exists():
+        return False
+
+    # Chrome 96+ stores cookies in Default/Network/Cookies
+    # Older Chrome used Default/Cookies
+    # Fall back to checking for the Default subdirectory if neither file exists
+    cookies_paths = [
+        profile_dir / "Default" / "Network" / "Cookies",  # Chrome 96+ (modern)
+        profile_dir / "Default" / "Cookies",              # Chrome < 96 (legacy)
+    ]
+    if any(p.exists() for p in cookies_paths):
+        return True
+
+    # If the Default directory exists at all, the profile has been initialized
+    # (Chrome may not have written cookies yet if not fully logged in)
+    return (profile_dir / "Default").exists()
+
 
 
 def run_headless_auth(port: int = 9223, timeout: int = 30) -> AuthTokens | None:

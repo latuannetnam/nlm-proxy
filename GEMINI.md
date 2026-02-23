@@ -29,7 +29,9 @@ nlm-proxy serve mcp --debug             # With debug logging
 nlm-proxy serve openai --port 8080      # OpenAI-compatible proxy
 
 # === Authentication ===
-nlm-proxy auth extract                  # Extract auth tokens (recommended)
+nlm-proxy auth extract                  # Extract auth tokens (recommended, one-time)
+nlm-proxy auth refresh                  # Refresh CSRF token (~2s, run when tokens expired)
+nlm-proxy auth refresh --full           # Full refresh: CSRF + cookies via headless Chrome (~10s)
 nlm-proxy auth test                     # Verify authentication
 
 # === Testing ===

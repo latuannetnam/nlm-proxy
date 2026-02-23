@@ -179,6 +179,91 @@ def auth_extract(
 
 
 # =============================================================================
+# auth refresh
+# =============================================================================
+@auth_app.command("refresh")
+def auth_refresh(
+    debug: Annotated[
+        Optional[bool],
+        typer.Option("--debug", help="Enable debug logging"),
+    ] = None,
+    full: Annotated[
+        bool,
+        typer.Option(
+            "--full",
+            help="Full refresh: also refresh cookies via headless Chrome (slower, ~10s)",
+        ),
+    ] = False,
+):
+    """Refresh auth tokens on demand without restarting the proxy.
+
+    Default: refreshes the CSRF token and session ID by fetching the
+    NotebookLM homepage with your stored cookies (~2s). Updates auth.json
+    so running proxy servers pick up the new tokens automatically.
+
+    With --full: additionally launches headless Chrome with the saved
+    Chrome profile to extract fresh Google cookies (~10s). Requires a
+    prior 'nlm-proxy auth extract' run so the profile has a saved login.
+    """
+    from nlm_proxy.core import setup_logging
+    from nlm_proxy.core.auth_refresh import refresh_csrf_once, refresh_cookies_once
+
+    shared = get_shared_settings()
+    auth = get_auth_settings()
+
+    resolved_debug = debug if debug is not None else shared.debug
+    setup_logging(debug=resolved_debug)
+
+    success = True
+
+    if full:
+        print("Running full token refresh (CSRF + cookies via headless Chrome)...")
+        print()
+
+        # Step 1: Cookie refresh via headless Chrome
+        print("Step 1/2 — Refreshing cookies via headless Chrome...")
+        cookie_ok = refresh_cookies_once(headless_port=auth.headless_port)
+        if cookie_ok:
+            print("  ✓ Cookies refreshed successfully")
+        else:
+            print("  ✗ Cookie refresh failed (no saved Chrome profile, or login expired)")
+            print("    Run 'nlm-proxy auth extract' to re-authenticate and save a Chrome profile.")
+            success = False
+
+        # Step 2: CSRF refresh (always attempt, even if cookies failed)
+        print("Step 2/2 — Refreshing CSRF token and session ID...")
+        csrf_ok = refresh_csrf_once()
+        if csrf_ok:
+            print("  ✓ CSRF token refreshed successfully")
+        else:
+            print("  ✗ CSRF refresh failed (cookies may be expired)")
+            success = False
+
+    else:
+        print("Refreshing CSRF token and session ID...")
+        csrf_ok = refresh_csrf_once()
+        if csrf_ok:
+            print("  ✓ CSRF token and session ID refreshed successfully")
+            print()
+            print("Tip: Use --full to also refresh your Google cookies via headless Chrome.")
+        else:
+            print("  ✗ CSRF refresh failed")
+            print()
+            print("Possible causes:")
+            print("  - Your Google cookies have expired → run 'nlm-proxy auth extract'")
+            print("  - No cached tokens found → run 'nlm-proxy auth extract' first")
+            success = False
+
+    print()
+    if success:
+        print("Done. Run 'nlm-proxy auth test' to verify the refreshed tokens.")
+    else:
+        print("Refresh incomplete. Run 'nlm-proxy auth extract' to fully re-authenticate.")
+
+    raise typer.Exit(0 if success else 1)
+
+
+# =============================================================================
 # auth test
 # =============================================================================
 @auth_app.command("test")

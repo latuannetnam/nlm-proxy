@@ -719,7 +719,7 @@ class NotebookLMClient:
         
         # Try headless auth if Chrome profile exists
         try:
-            from notebooklm_mcp.auth_cli import run_headless_auth
+            from nlm_proxy.core.auth_cli import run_headless_auth
             tokens = run_headless_auth()
             if tokens:
                 self.cookies = tokens.cookies

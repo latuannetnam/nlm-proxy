@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nlm-proxy"
-version = "1.0.3"
+version = "1.0.4"
 description = "NotebookLM client library with MCP and OpenAI interfaces"
 readme = "README.md"
 license = "MIT"
