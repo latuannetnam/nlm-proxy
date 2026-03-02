@@ -296,3 +296,52 @@ class TestSmartRoutingSettings:
         s1 = config.get_routing_settings()
         s2 = config.get_routing_settings()
         assert s1 is s2
+
+
+class TestCacheSettings:
+    """Test CacheSettings class."""
+
+    def test_default_values(self):
+        """Test CacheSettings default values."""
+        from nlm_proxy.core.config import CacheSettings
+        settings = CacheSettings()
+
+        assert settings.response_cache_enabled is True
+        assert settings.response_cache_ttl == 14400
+        assert settings.response_cache_max_entries == 1000
+        assert settings.semantic_match_enabled is True
+        assert settings.embedding_model == "intfloat/multilingual-e5-small"
+        assert settings.similarity_threshold == 0.7
+        assert settings.similarity_exact_threshold == 0.95
+        assert settings.semantic_match_top_k == 10
+
+    def test_env_override(self, monkeypatch):
+        """Test CacheSettings loads from environment."""
+        monkeypatch.setenv("NLM_PROXY_CACHE_RESPONSE_CACHE_TTL", "7200")
+        monkeypatch.setenv("NLM_PROXY_CACHE_RESPONSE_CACHE_MAX_ENTRIES", "500")
+        monkeypatch.setenv("NLM_PROXY_CACHE_SIMILARITY_THRESHOLD", "0.8")
+
+        from nlm_proxy.core.config import CacheSettings
+        settings = CacheSettings()
+
+        assert settings.response_cache_ttl == 7200
+        assert settings.response_cache_max_entries == 500
+        assert settings.similarity_threshold == 0.8
+
+    def test_disable_cache(self, monkeypatch):
+        """Test disabling cache via env."""
+        monkeypatch.setenv("NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED", "false")
+
+        from nlm_proxy.core.config import CacheSettings
+        settings = CacheSettings()
+
+        assert settings.response_cache_enabled is False
+
+    def test_get_cache_settings_singleton(self):
+        """get_cache_settings should return singleton."""
+        import nlm_proxy.core.config as config
+        config._cache = None
+
+        s1 = config.get_cache_settings()
+        s2 = config.get_cache_settings()
+        assert s1 is s2

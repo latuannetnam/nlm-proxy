@@ -251,6 +251,43 @@ class TracingSettings(BaseSettings):
     )
 
 
+class CacheSettings(BaseSettings):
+    """Response cache configuration."""
+
+    response_cache_enabled: bool = Field(
+        default=True, description="Enable response caching"
+    )
+    response_cache_ttl: int = Field(
+        default=14400, description="Response cache TTL in seconds (4h)"
+    )
+    response_cache_max_entries: int = Field(
+        default=1000, description="Max cached responses (LRU)"
+    )
+    semantic_match_enabled: bool = Field(
+        default=True, description="Enable semantic matching"
+    )
+    embedding_model: str = Field(
+        default="intfloat/multilingual-e5-small",
+        description="fastembed model for embeddings",
+    )
+    similarity_threshold: float = Field(
+        default=0.7, description="Min cosine similarity"
+    )
+    similarity_exact_threshold: float = Field(
+        default=0.95, description="Skip LLM verification threshold"
+    )
+    semantic_match_top_k: int = Field(
+        default=10, description="Max candidates sent to LLM"
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="NLM_PROXY_CACHE_",
+        env_file=_get_env_files(),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 # Singleton instances
 _shared: SharedSettings | None = None
 _logging: LoggingSettings | None = None
@@ -259,6 +296,7 @@ _openai: OpenAISettings | None = None
 _auth: AuthSettings | None = None
 _routing: SmartRoutingSettings | None = None
 _tracing: TracingSettings | None = None
+_cache: CacheSettings | None = None
 
 
 def get_shared_settings() -> SharedSettings:
@@ -315,6 +353,14 @@ def get_tracing_settings() -> TracingSettings:
     if _tracing is None:
         _tracing = TracingSettings()
     return _tracing
+
+
+def get_cache_settings() -> CacheSettings:
+    """Get the cache settings instance."""
+    global _cache
+    if _cache is None:
+        _cache = CacheSettings()
+    return _cache
 
 
 # Keep backward compatibility aliases
