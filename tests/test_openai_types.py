@@ -101,3 +101,26 @@ def test_chat_completion_response_non_streaming():
     data = response.model_dump()
     assert data["object"] == "chat.completion"
     assert data["choices"][0]["message"]["content"] == "Hello!"
+
+
+@pytest.mark.openai
+def test_bypass_cache_default_false():
+    """bypass_cache should default to False."""
+    from nlm_proxy.openai.types import ChatCompletionRequest
+    req = ChatCompletionRequest(
+        model="test",
+        messages=[{"role": "user", "content": "hello"}]
+    )
+    assert req.bypass_cache is False
+
+
+@pytest.mark.openai
+def test_bypass_cache_from_extra_body():
+    """bypass_cache should be settable via extra_body."""
+    from nlm_proxy.openai.types import ChatCompletionRequest
+    req = ChatCompletionRequest(
+        model="test",
+        messages=[{"role": "user", "content": "hello"}],
+        bypass_cache=True
+    )
+    assert req.bypass_cache is True

@@ -22,6 +22,7 @@ class ChatCompletionRequest(BaseModel):
     conversation_id: str | None = None
     include_thinking: bool = True
     metadata: dict | None = None  # Open WebUI sends chat_id here
+    bypass_cache: bool = False  # Skip response cache, query NLM directly
 
 
 class DeltaContent(BaseModel):
