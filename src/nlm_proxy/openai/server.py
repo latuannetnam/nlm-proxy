@@ -12,8 +12,9 @@ from fastapi.responses import StreamingResponse
 from nlm_proxy.core import NotebookLMClient
 from nlm_proxy.core.auth import load_cached_tokens
 from nlm_proxy.core.auth_refresh import AuthRefreshService
-from nlm_proxy.core.config import get_auth_settings, get_openai_settings, get_routing_settings, get_tracing_settings
+from nlm_proxy.core.config import get_auth_settings, get_cache_settings, get_openai_settings, get_routing_settings, get_tracing_settings
 from nlm_proxy.core.logging import get_logger
+from nlm_proxy.core.response_cache import ResponseCache
 from nlm_proxy.core.tracing import init_tracing, shutdown_tracing, instrument_fastapi, instrument_httpx, get_tracer, add_span_attributes
 from nlm_proxy.openai.notebook_cache import NotebookCache
 from nlm_proxy.openai.router import SmartRouter, RequestType
@@ -41,6 +42,8 @@ app = FastAPI(
 app.state.session_store = None
 # Initialize notebook cache for smart routing (will be configured in main())
 app.state.notebook_cache = None
+# Initialize response cache (will be configured in main())
+app.state.response_cache = None
 # Initialize auth refresh service (will be configured in main())
 app.state.auth_refresh_service = None
 
@@ -549,6 +552,39 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     query_text = user_messages[-1].content
     logger.debug(f"[PROXY] Extracted query: {query_text[:500]}{'...' if len(query_text) > 500 else ''}")
 
+    # First-turn cache check (only when no existing conversation)
+    is_first_turn = request.conversation_id is None
+    if chat_id and app.state.session_store:
+        stored_conv_id = app.state.session_store.get(chat_id)
+        if stored_conv_id:
+            is_first_turn = False
+
+    if is_first_turn and not request.bypass_cache and app.state.response_cache:
+        cache_result = app.state.response_cache.lookup(request.model, query_text)
+        if cache_result:
+            logger.info(f"[CACHE] HIT for '{query_text[:80]}', returning cached response")
+            response = ChatCompletionResponse(
+                id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                created=int(time.time()),
+                model=request.model,
+                choices=[ResponseChoice(
+                    index=0,
+                    message=ResponseMessage(role="assistant", content=cache_result.answer),
+                    finish_reason="stop"
+                )],
+                usage=Usage(
+                    prompt_tokens=len(query_text),
+                    completion_tokens=len(cache_result.answer),
+                    total_tokens=len(query_text) + len(cache_result.answer),
+                ),
+                system_fingerprint="cache_hit",
+            )
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                content=response.model_dump(),
+                headers={"X-Cache-Status": "HIT"},
+            )
+
     client = await get_client()
 
     if request.stream:
@@ -599,6 +635,17 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
             usage=Usage(prompt_tokens=len(query_text), completion_tokens=len(answer), total_tokens=len(query_text) + len(answer)),
             system_fingerprint=f"conv_{conv_id}" if conv_id else None
         )
+
+        # Store in response cache for first-turn queries
+        if is_first_turn and app.state.response_cache and answer and conv_id:
+            app.state.response_cache.store(
+                notebook_id=request.model,
+                query=query_text,
+                answer=answer,
+                thinking=None,
+                conversation_id=conv_id,
+            )
+
         logger.debug(f"[PROXY] Returning response with {len(answer)} characters")
         return response
     finally:
@@ -660,9 +707,42 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     app.state.session_store = SessionStore(ttl_seconds=session_ttl)
     logger.info(f"Session store initialized with TTL={session_ttl}s ({session_ttl/3600:.1f} hours)")
 
+    # Initialize response cache
+    routing_settings = get_routing_settings()
+    cache_settings = get_cache_settings()
+    if cache_settings.response_cache_enabled:
+        try:
+            llm_client = None
+            if cache_settings.semantic_match_enabled and routing_settings.llm_api_key:
+                from nlm_proxy.core.llm_client import ExternalLLMClient
+                llm_client = ExternalLLMClient(
+                    base_url=routing_settings.llm_base_url,
+                    api_key=routing_settings.llm_api_key,
+                    model=routing_settings.llm_model,
+                )
+
+            app.state.response_cache = ResponseCache(
+                max_entries=cache_settings.response_cache_max_entries,
+                ttl_seconds=cache_settings.response_cache_ttl,
+                semantic_enabled=cache_settings.semantic_match_enabled,
+                llm_client=llm_client,
+                similarity_threshold=cache_settings.similarity_threshold,
+                similarity_exact_threshold=cache_settings.similarity_exact_threshold,
+                top_k=cache_settings.semantic_match_top_k,
+            )
+            logger.info(
+                "Response cache initialized: max_entries=%d, ttl=%ds, semantic=%s",
+                cache_settings.response_cache_max_entries,
+                cache_settings.response_cache_ttl,
+                cache_settings.semantic_match_enabled,
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize response cache: {e}")
+    else:
+        logger.debug("Response cache disabled (NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED=false)")
+
     # Initialize notebook cache with proactive refresh for smart routing
     # Smart routing is enabled if llm_api_key is configured
-    routing_settings = get_routing_settings()
     if routing_settings.llm_api_key:
         try:
             tokens = load_cached_tokens()
@@ -670,13 +750,22 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
                 nlm_client = NotebookLMClient(
                     cookies=tokens.cookies,
                     csrf_token=tokens.csrf_token or "",
-                    session_id=tokens.session_id or ""
+                    session_id=tokens.session_id or "",
+                    notebook_cache=None,  # Will be set after cache is created
                 )
+                # Wire on_sources_changed callback to invalidate response cache
+                on_sources_changed = None
+                if app.state.response_cache:
+                    on_sources_changed = app.state.response_cache.invalidate_notebook
+
                 app.state.notebook_cache = NotebookCache(
                     nlm_client=nlm_client,
                     ttl_seconds=routing_settings.summary_cache_ttl,
-                    allowed_notebooks=routing_settings.allowed_notebooks
+                    allowed_notebooks=routing_settings.allowed_notebooks,
+                    on_sources_changed=on_sources_changed,
                 )
+                # Now wire notebook_cache back to the client
+                nlm_client._notebook_cache = app.state.notebook_cache
                 logger.info(f"Notebook cache initialized with TTL={routing_settings.summary_cache_ttl}s")
             else:
                 logger.warning("Smart routing configured but no auth tokens found - cache not initialized")
