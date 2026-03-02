@@ -328,7 +328,7 @@ class NotebookLMClient:
         "sec-ch-ua-platform": '"macOS"',
     }
 
-    def __init__(self, cookies: dict[str, str], csrf_token: str = "", session_id: str = ""):
+    def __init__(self, cookies: dict[str, str], csrf_token: str = "", session_id: str = "", notebook_cache: object | None = None):
         """
         Initialize the client.
 
@@ -336,11 +336,13 @@ class NotebookLMClient:
             cookies: Dict of Google auth cookies (SID, SSID, HSID, APISID, SAPISID, etc.)
             csrf_token: CSRF token (optional - will be auto-extracted from page if not provided)
             session_id: Session ID (optional - will be auto-extracted from page if not provided)
+            notebook_cache: Optional NotebookCache for source ID lookup (avoids get_notebook RPC)
         """
         self.cookies = cookies
         self.csrf_token = csrf_token
         self._client: httpx.AsyncClient | None = None
         self._session_id = session_id
+        self._notebook_cache = notebook_cache
 
         # Conversation cache for follow-up queries
         # Key: conversation_id, Value: list of ConversationTurn objects
@@ -1463,7 +1465,12 @@ class NotebookLMClient:
 
         client = await self._get_client()
 
-        # If no source_ids provided, get them from the notebook
+        # If no source_ids provided, try NotebookCache first, then fallback to get_notebook RPC
+        if source_ids is None and self._notebook_cache:
+            info = self._notebook_cache.get(notebook_id)
+            if info and info.sources:
+                source_ids = [s.id for s in info.sources]
+                logger.debug(f"[CACHE] Source IDs from NotebookCache: {len(source_ids)} sources")
         if source_ids is None:
             notebook_data = await self.get_notebook(notebook_id)
             source_ids = self._extract_source_ids_from_notebook(notebook_data)
@@ -1573,7 +1580,12 @@ class NotebookLMClient:
 
         client = await self._get_client()
 
-        # If no source_ids provided, get them from the notebook
+        # If no source_ids provided, try NotebookCache first, then fallback to get_notebook RPC
+        if source_ids is None and self._notebook_cache:
+            info = self._notebook_cache.get(notebook_id)
+            if info and info.sources:
+                source_ids = [s.id for s in info.sources]
+                logger.debug(f"[CACHE] Source IDs from NotebookCache: {len(source_ids)} sources")
         if source_ids is None:
             notebook_data = await self.get_notebook(notebook_id)
             source_ids = self._extract_source_ids_from_notebook(notebook_data)
