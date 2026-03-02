@@ -353,6 +353,109 @@ class ResponseCache:
             logger.exception("[CACHE] Failed to compute embedding")
         return None
 
+    # ── Layer 3: LLM Semantic Verification ───────────────────────────────
+
+    @staticmethod
+    def _build_verification_prompt(
+        new_query: str, cached_queries: list[str]
+    ) -> str:
+        """Build the LLM verification prompt.
+
+        The prompt asks the LLM to determine if the new query is semantically
+        equivalent to any of the cached queries (i.e., would produce the same
+        answer from the same knowledge base).
+        """
+        numbered = "\n".join(
+            f'{i + 1}. "{q}"' for i, q in enumerate(cached_queries)
+        )
+        return (
+            "You are a cache lookup assistant. Determine if the new question "
+            "is asking essentially the same thing as any previously cached "
+            "question. Two questions match if they would produce the same "
+            "answer from the same knowledge base.\n\n"
+            "Rules:\n"
+            "- Match: same intent, just different wording\n"
+            '  "What are the key points?" ≈ "Summarize the main takeaways"\n'
+            '  "Tóm tắt điểm chính" ≈ "Nêu các ý chính"\n'
+            "- No match: related topic but different scope or different info "
+            "requested\n"
+            '  "What happened in Q1?" ≠ "What happened in Q2?"\n'
+            '  "List the team members" ≠ "Who is the project lead?"\n\n'
+            f'New question: "{new_query}"\n\n'
+            f"Cached questions:\n{numbered}\n\n"
+            "Reply with ONLY the number of the matching question, or -1 if "
+            "no match."
+        )
+
+    def _parse_semantic_match(
+        self, response: str, num_candidates: int
+    ) -> int | None:
+        """Parse LLM response to matched index (0-based) or None.
+
+        Handles: exact number, -1, "none", "no match", number embedded in text.
+        """
+        text = response.strip()
+        if not text:
+            return None
+
+        # Explicit no-match responses
+        if text == "-1" or text.lower() in ("none", "no match"):
+            return None
+
+        # Try direct integer parse
+        try:
+            index = int(text) - 1  # 1-based → 0-based
+            if 0 <= index < num_candidates:
+                return index
+            return None
+        except ValueError:
+            pass
+
+        # Try to extract a number from mixed text
+        match = re.search(r"\b(\d+)\b", text)
+        if match:
+            index = int(match.group(1)) - 1
+            if 0 <= index < num_candidates:
+                return index
+
+        return None
+
+    async def _verify_semantic_match(
+        self,
+        query: str,
+        candidates: list[CachedResponse],
+    ) -> CachedResponse | None:
+        """Ask LLM to verify if query matches any cached candidate.
+
+        Returns the matched CachedResponse, or None on no match / error.
+        """
+        if not self._llm_client or not candidates:
+            return None
+
+        cached_queries = [c.query for c in candidates]
+        prompt = self._build_verification_prompt(query, cached_queries)
+
+        try:
+            response = await self._llm_client.chat(prompt)
+            matched_idx = self._parse_semantic_match(
+                response, len(candidates)
+            )
+            if matched_idx is not None:
+                logger.info(
+                    "[CACHE] LLM verified semantic match: "
+                    '"%s" ≈ "%s"',
+                    query,
+                    candidates[matched_idx].query,
+                )
+                return candidates[matched_idx]
+            logger.debug("[CACHE] LLM: no semantic match for '%s'", query)
+        except TimeoutError:
+            logger.warning("[CACHE] LLM verification timed out for '%s'", query)
+        except Exception:
+            logger.exception("[CACHE] LLM verification failed for '%s'", query)
+
+        return None
+
     # ── Internal helpers ─────────────────────────────────────────────────
 
     def _evict_oldest(self) -> None:
