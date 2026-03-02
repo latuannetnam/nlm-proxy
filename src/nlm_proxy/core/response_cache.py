@@ -225,6 +225,134 @@ class ResponseCache:
 
         logger.info("[CACHE] All entries cleared")
 
+    # ── Layer 2: Embedding Pre-filter ────────────────────────────────────
+
+    @staticmethod
+    def _normalize_embedding(vec: list[float]) -> list[float]:
+        """L2-normalize embedding to unit vector for dot-product similarity."""
+        import numpy as np
+        arr = np.array(vec, dtype=np.float32)
+        norm = np.linalg.norm(arr)
+        if norm > 0:
+            arr /= norm
+        return arr.tolist()
+
+    def _rebuild_matrix(self, notebook_id: str) -> None:
+        """Rebuild NumPy similarity matrix for a notebook. Must hold self._lock."""
+        import numpy as np
+        entries = self._cache_by_notebook.get(notebook_id, [])
+        embeddings = [e.embedding for e in entries if e.embedding is not None]
+        if embeddings:
+            self._notebook_matrices[notebook_id] = np.array(
+                embeddings, dtype=np.float32
+            )
+        else:
+            self._notebook_matrices.pop(notebook_id, None)
+        self._matrix_dirty[notebook_id] = False
+
+    def _find_similar(
+        self,
+        query_emb: object,  # np.ndarray
+        notebook_id: str,
+        top_k: int | None = None,
+    ) -> list[tuple[float, CachedResponse]]:
+        """Find similar cached queries via NumPy vectorized cosine similarity.
+
+        Returns list of (similarity_score, CachedResponse) sorted by score desc.
+        Only entries above self._similarity_threshold are returned.
+        If any entry is above self._similarity_exact_threshold, only that single
+        entry is returned (early termination — skip LLM verification).
+        """
+        import numpy as np
+
+        if top_k is None:
+            top_k = self._top_k
+
+        with self._lock:
+            entries = self._cache_by_notebook.get(notebook_id, [])
+            # Filter to entries that have embeddings
+            entries_with_emb = [e for e in entries if e.embedding is not None]
+            if not entries_with_emb:
+                return []
+
+            # Rebuild matrix if dirty or missing
+            if self._matrix_dirty.get(notebook_id, True):
+                self._rebuild_matrix(notebook_id)
+
+            matrix = self._notebook_matrices.get(notebook_id)
+            if matrix is None:
+                return []
+
+            # Ensure query embedding is a numpy array
+            if not isinstance(query_emb, np.ndarray):
+                query_emb = np.array(query_emb, dtype=np.float32)
+
+            # Single matrix-vector multiply — all dot products at once
+            # Pre-normalized embeddings means dot product = cosine similarity
+            similarities = matrix @ query_emb  # (n,)
+
+            # Early termination: near-perfect match → skip LLM verification
+            max_sim = float(similarities.max())
+            if max_sim >= self._similarity_exact_threshold:
+                best_idx = int(similarities.argmax())
+                return [(max_sim, entries_with_emb[best_idx])]
+
+            # Filter by threshold and get top-K
+            mask = similarities >= self._similarity_threshold
+            if not mask.any():
+                return []
+
+            filtered_idx = np.where(mask)[0]
+            sorted_idx = filtered_idx[
+                np.argsort(similarities[filtered_idx])[::-1]
+            ][:top_k]
+            return [
+                (float(similarities[i]), entries_with_emb[i]) for i in sorted_idx
+            ]
+
+    def _compute_embedding(self, query: str) -> object | None:
+        """Compute query embedding using fastembed model.
+
+        Returns numpy array or None if embedding model is not available.
+        """
+        if self._embedding_model_instance is None:
+            if not self._embedding_model_name:
+                return None
+            try:
+                from fastembed import TextEmbedding
+                self._embedding_model_instance = TextEmbedding(
+                    self._embedding_model_name
+                )
+                logger.info(
+                    "[CACHE] Embedding model loaded: %s",
+                    self._embedding_model_name,
+                )
+            except ImportError:
+                logger.info(
+                    "[CACHE] fastembed not installed, semantic matching disabled"
+                )
+                self._semantic_enabled = False
+                return None
+            except Exception:
+                logger.exception("[CACHE] Failed to load embedding model")
+                self._semantic_enabled = False
+                return None
+
+        import numpy as np
+        try:
+            embeddings = list(
+                self._embedding_model_instance.embed([query])
+            )
+            if embeddings:
+                emb = np.array(embeddings[0], dtype=np.float32)
+                norm = np.linalg.norm(emb)
+                if norm > 0:
+                    emb /= norm
+                return emb
+        except Exception:
+            logger.exception("[CACHE] Failed to compute embedding")
+        return None
+
     # ── Internal helpers ─────────────────────────────────────────────────
 
     def _evict_oldest(self) -> None:
