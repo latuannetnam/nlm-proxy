@@ -106,6 +106,25 @@ response = client.chat.completions.create(
 
 See [Smart Routing Architecture](docs/smart-routing-architecture.md) for details.
 
+### Response Cache
+Three-layer cache that eliminates 40-50s latency for repeated queries:
+
+| Layer | Method | Speed |
+|-------|--------|-------|
+| **Exact Match** | Hash-based lookup with LRU eviction and TTL | Instant |
+| **Embedding Pre-filter** | Multilingual vector similarity (fastembed) | ~10ms |
+| **LLM Verification** | Semantic match confirmation via external LLM | ~1s |
+
+- Auto-invalidates when notebook sources change
+- Per-request bypass via `bypass_cache` parameter
+- `X-Cache-Status: HIT` header on cached responses
+
+```bash
+# Enable (on by default)
+NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED=true
+NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400  # 4 hours
+```
+
 ## Installation
 
 ### Basic Installation
@@ -129,6 +148,9 @@ pip install nlm-proxy[openai]
 
 # Install everything
 pip install nlm-proxy[all]
+
+# Install with response cache (semantic matching)
+pip install nlm-proxy[cache]
 
 # Install from source (for development with all extras)
 git clone https://github.com/latuannetnam/nlm-proxy.git
@@ -400,6 +422,13 @@ NLM_PROXY_LOG_LEVEL=INFO
 NLM_PROXY_LOG_FILE=~/.nlm-proxy/logs/nlm-proxy.log
 NLM_PROXY_LOG_MAX_SIZE=10485760
 NLM_PROXY_LOG_BACKUP_COUNT=5
+
+# Response Cache
+NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED=true
+NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400
+NLM_PROXY_CACHE_RESPONSE_CACHE_MAX_ENTRIES=1000
+NLM_PROXY_CACHE_SEMANTIC_MATCH_ENABLED=true
+NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.7
 ```
 
 ### Usage Examples
@@ -492,6 +521,11 @@ src/nlm_proxy/
     ├── session.py      # Session management
     └── types.py        # Pydantic models
 ```
+
+Key cache files:
+- `core/config.py` — `CacheSettings` (env prefix: `NLM_PROXY_CACHE_`)
+- `core/response_cache.py` — `ResponseCache` with three-layer lookup
+- `openai/notebook_cache.py` — Source change detection + auto-invalidation
 
 ## MCP Tools
 

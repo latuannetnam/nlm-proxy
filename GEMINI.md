@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**NLM Proxy** — OpenAI-compatible proxy for NotebookLM. Provides programmatic access to NotebookLM (notebooklm.google.com) via MCP server and OpenAI-compatible REST API. Features smart routing that automatically classifies requests and routes them to NotebookLM (knowledge queries) or external LLM (general tasks). Tested with personal/free tier accounts. Relies on internal `batchexecute` RPCs.
+**NLM Proxy** — OpenAI-compatible proxy for NotebookLM. Provides programmatic access to NotebookLM (notebooklm.google.com) via MCP server and OpenAI-compatible REST API. Features smart routing that automatically classifies requests and routes them to NotebookLM (knowledge queries) or external LLM (general tasks). Includes a three-layer response cache (exact match → embedding pre-filter → LLM verification) that eliminates 40-50s latency for repeated queries. Tested with personal/free tier accounts. Relies on internal `batchexecute` RPCs.
 
 ## Rules
 
@@ -19,6 +19,7 @@
 ```bash
 # === Installation ===
 uv pip install -e ".[all]"              # Install with all extras
+uv pip install -e ".[cache]"            # Install with response cache (fastembed)
 uv cache clean && uv tool install ".[all]" --force  # Reinstall after changes
 
 # === MCP Server ===
@@ -61,6 +62,7 @@ Detailed documentation in `.agent/memory/`:
 | `smart-routing.md` | Smart routing configuration, LLM client, router |
 | `logging.md` | Configuring logs, debugging |
 | `tracing.md` | OpenTelemetry tracing setup, TLS/auth configuration, known issues |
+| `response-cache.md` | Response cache architecture, three-layer lookup, configuration |
 | `troubleshooting.md` | Common errors and fixes |
 
 ## References

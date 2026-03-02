@@ -395,16 +395,61 @@ POST /v1/chat/completions
   │     └─> handle_smart_routing()
   │           ├─> Extract chat_id from headers/metadata
   │           ├─> Lookup conversation_id from SessionStore
+  │           ├─> First-turn cache check (ResponseCache.lookup)
+  │           │     └─ HIT → return cached response + X-Cache-Status: HIT
   │           ├─> router.route(query)
   │           ├─> If LLM_TASK: stream from external LLM
   │           └─> If NOTEBOOKLM: stream from selected notebook
-  │                 └─> Save conversation_id to SessionStore
+  │                 ├─> Save conversation_id to SessionStore
+  │                 └─> Store response in ResponseCache
   │
   └─ model == notebook_id
         └─> Direct NotebookLM query (existing flow)
+              ├─> First-turn cache check (ResponseCache.lookup)
+              │     └─ HIT → return cached response + X-Cache-Status: HIT
+              └─> Store response in ResponseCache
 ```
 
-### 6. Session Mapping (Conversation Continuity)
+### 6. Response Cache (`core/response_cache.py`)
+
+Three-layer cache that eliminates 40-50s latency for repeated/similar queries:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                      ResponseCache Lookup                          │
+│                                                                    │
+│  Query: "What is the attention mechanism?"                        │
+│  Notebook: "ML Research"                                          │
+│                                                                    │
+│  Layer 1: Exact Match (hash-based)                                │
+│  ┌─────────────────────────────┐                                  │
+│  │ SHA-256(notebook+query)     │── HIT ──> Return immediately     │
+│  │ LRU eviction, TTL check    │                                  │
+│  └─────────────┬───────────────┘                                  │
+│                │ MISS                                              │
+│                ▼                                                   │
+│  Layer 2: Embedding Pre-filter (fastembed + numpy)                │
+│  ┌─────────────────────────────┐                                  │
+│  │ Cosine similarity ≥ 0.7    │── No candidates ──> MISS         │
+│  │ Top-K candidates           │                                  │
+│  └─────────────┬───────────────┘                                  │
+│                │ Candidates found                                  │
+│                ▼                                                   │
+│  Layer 3: LLM Verification                                        │
+│  ┌─────────────────────────────┐                                  │
+│  │ "Are these semantically     │── YES ──> Return cached response │
+│  │  equivalent?"               │── NO  ──> MISS                  │
+│  └─────────────────────────────┘                                  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**Auto-Invalidation:**
+- `NotebookCache.on_sources_changed` → `ResponseCache.invalidate_notebook`
+- When notebook sources change, all cached responses for that notebook are cleared
+
+**Configuration:** Uses `NLM_PROXY_CACHE_` prefix. See `.env.example` for details.
+
+### 7. Session Mapping (Conversation Continuity)
 
 The smart router supports mapping Open Web UI `chat_id` to NotebookLM `conversation_id` for multi-turn conversations.
 
