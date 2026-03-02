@@ -192,6 +192,66 @@ class ResponseCache:
 
             return entry
 
+    async def lookup_async(
+        self,
+        notebook_id: str,
+        query: str,
+        bypass_cache: bool = False,
+    ) -> CachedResponse | None:
+        """Full three-layer async lookup: L1 → L2 → L3.
+
+        Layer 1: Exact hash match (always)
+        Layer 2: Embedding pre-filter (if semantic_enabled)
+        Layer 3: LLM verification (if candidates found and not near-exact)
+
+        Returns CachedResponse on hit, None on miss.
+        """
+        if bypass_cache:
+            return None
+
+        # Layer 1: exact hash match
+        result = self.lookup(notebook_id, query)
+        if result is not None:
+            logger.info("[CACHE] HIT (exact) for '%s'", query[:80])
+            return result
+
+        # Layers 2-3 only if semantic matching is enabled
+        if not self._semantic_enabled:
+            return None
+
+        # Layer 2: compute embedding and find similar
+        query_emb = self._compute_embedding(query)
+        if query_emb is None:
+            return None
+
+        candidates = self._find_similar(query_emb, notebook_id)
+        if not candidates:
+            return None
+
+        # Check if early termination (similarity >= exact threshold)
+        if len(candidates) == 1 and candidates[0][0] >= self._similarity_exact_threshold:
+            entry = candidates[0][1]
+            with self._lock:
+                entry.hit_count += 1
+            logger.info(
+                "[CACHE] HIT (semantic, sim=%.3f, skip-LLM) for '%s'",
+                candidates[0][0],
+                query[:80],
+            )
+            return entry
+
+        # Layer 3: LLM verification
+        matched = await self._verify_semantic_match(
+            query, [c[1] for c in candidates]
+        )
+        if matched is not None:
+            with self._lock:
+                matched.hit_count += 1
+            logger.info("[CACHE] HIT (semantic, LLM-verified) for '%s'", query[:80])
+            return matched
+
+        return None
+
     # ── Invalidation ─────────────────────────────────────────────────────
 
     def invalidate_notebook(self, notebook_id: str) -> None:
