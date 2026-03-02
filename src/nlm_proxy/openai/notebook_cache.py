@@ -156,6 +156,7 @@ class NotebookCache:
         ttl_seconds: int = 3600,
         allowed_notebooks: list[str] | None = None,
         source_fetch_concurrency: int | None = None,
+        on_sources_changed: "Callable[[str], None] | None" = None,
     ):
         """Initialize the cache with proactive refresh.
 
@@ -164,6 +165,7 @@ class NotebookCache:
             ttl_seconds: Cache TTL in seconds (default: 1 hour)
             allowed_notebooks: Optional list of notebook IDs to cache (default: all)
             source_fetch_concurrency: Max concurrent source fetches (default: from env or 10)
+            on_sources_changed: Callback fired when a notebook's sources change
         """
         self._nlm_client = nlm_client
         self._ttl_seconds = ttl_seconds
@@ -172,6 +174,7 @@ class NotebookCache:
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._refresh_thread: threading.Thread | None = None
+        self._on_sources_changed = on_sources_changed
 
         # Configure source fetch concurrency from env or parameter
         self._source_fetch_concurrency = source_fetch_concurrency or int(
@@ -351,16 +354,40 @@ class NotebookCache:
         topics: list[str],
         sources: list[SourceInfo] | None = None
     ) -> None:
-        """Cache notebook info with optional source information."""
+        """Cache notebook info with optional source information.
+
+        If the notebook already exists and its source IDs have changed,
+        the on_sources_changed callback is fired.
+        """
+        new_sources = sources or []
+        fire_callback = False
+
         with self._lock:
+            old_info = self._cache.get(notebook_id)
+            if old_info and old_info.sources:
+                old_source_ids = {s.id for s in old_info.sources}
+                new_source_ids = {s.id for s in new_sources}
+                if old_source_ids != new_source_ids:
+                    fire_callback = True
+                    logger.info(
+                        "[CACHE] Sources changed for %s: %d → %d",
+                        notebook_id,
+                        len(old_source_ids),
+                        len(new_source_ids),
+                    )
+
             self._cache[notebook_id] = NotebookInfo(
                 id=notebook_id,
                 title=title,
                 summary=summary,
                 topics=topics,
                 cached_at=time.time(),
-                sources=sources or []
+                sources=new_sources,
             )
+
+        # Fire callback outside the lock to avoid deadlocks
+        if fire_callback and self._on_sources_changed:
+            self._on_sources_changed(notebook_id)
 
     def get_all(self) -> list[NotebookInfo]:
         """Get all non-expired cached notebooks."""

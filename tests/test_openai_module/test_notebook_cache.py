@@ -80,3 +80,56 @@ def test_notebook_cache_clear():
 
     assert cache.get("nb-123") is None
     assert cache.get_all() == []
+
+
+def test_on_sources_changed_callback_fires():
+    """Callback should fire when sources change."""
+    from nlm_proxy.openai.notebook_cache import NotebookCache, SourceInfo
+    from unittest.mock import AsyncMock, MagicMock
+
+    callback = MagicMock()
+    mock_client = MagicMock()
+    mock_client.list_notebooks = AsyncMock(return_value=[])
+
+    cache = NotebookCache(
+        nlm_client=mock_client, ttl_seconds=3600,
+        on_sources_changed=callback,
+    )
+
+    # First set — no previous sources, no callback
+    cache.set("nb-1", "Test", "Summary", [], sources=[
+        SourceInfo(id="src-1", title="Doc 1", source_type="pdf"),
+    ])
+    callback.assert_not_called()
+
+    # Same sources — no callback
+    cache.set("nb-1", "Test", "Summary", [], sources=[
+        SourceInfo(id="src-1", title="Doc 1", source_type="pdf"),
+    ])
+    callback.assert_not_called()
+
+    # Different sources — callback fires
+    cache.set("nb-1", "Test", "Summary", [], sources=[
+        SourceInfo(id="src-1", title="Doc 1", source_type="pdf"),
+        SourceInfo(id="src-2", title="Doc 2", source_type="url"),
+    ])
+    callback.assert_called_once_with("nb-1")
+
+
+def test_on_sources_changed_no_callback():
+    """Without callback, source changes should not crash."""
+    from nlm_proxy.openai.notebook_cache import NotebookCache, SourceInfo
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_client = MagicMock()
+    mock_client.list_notebooks = AsyncMock(return_value=[])
+
+    cache = NotebookCache(nlm_client=mock_client, ttl_seconds=3600)  # No callback
+
+    cache.set("nb-1", "Test", "Summary", [], sources=[
+        SourceInfo(id="src-1", title="Doc 1", source_type="pdf"),
+    ])
+    # Change sources — should not crash
+    cache.set("nb-1", "Test", "Summary", [], sources=[
+        SourceInfo(id="src-2", title="Doc 2", source_type="url"),
+    ])
