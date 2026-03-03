@@ -20,7 +20,7 @@ Uses `_global_hash_index` (query hash without notebook_id) and `pre_routing_l1_h
 | L2 | Embedding cosine similarity (fastembed + NumPy) | ~10-30ms | If semantic enabled |
 | L3 | LLM verification | ~1-2s | If L2 finds candidates below exact threshold |
 
-**Early termination:** L2 similarity ≥ 0.95 skips L3 (returns directly).
+**Early termination:** L2 similarity ≥ 0.85 skips L3 (returns directly). L3 retries once on empty LLM response.
 
 ## Alias Creation
 
@@ -41,7 +41,7 @@ NLM_PROXY_CACHE_RESPONSE_CACHE_MAX_ENTRIES=1000
 NLM_PROXY_CACHE_SEMANTIC_MATCH_ENABLED=true
 NLM_PROXY_CACHE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2  # 0.22GB
 NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.5           # L2 pre-filter threshold
-NLM_PROXY_CACHE_SIMILARITY_EXACT_THRESHOLD=0.95
+NLM_PROXY_CACHE_SIMILARITY_EXACT_THRESHOLD=0.85
 NLM_PROXY_CACHE_SEMANTIC_MATCH_TOP_K=10
 ```
 

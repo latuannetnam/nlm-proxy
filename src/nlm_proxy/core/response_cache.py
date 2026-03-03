@@ -684,6 +684,7 @@ class ResponseCache:
         """Ask LLM to verify if query matches any cached candidate.
 
         Returns the matched CachedResponse, or None on no match / error.
+        Retries once if LLM returns an empty response.
         """
         if not self._llm_client or not candidates:
             return None
@@ -691,24 +692,57 @@ class ResponseCache:
         cached_queries = [c.query for c in candidates]
         prompt = self._build_verification_prompt(query, cached_queries)
 
-        try:
-            response = await self._llm_client.complete(prompt, max_tokens=10)
-            matched_idx = self._parse_semantic_match(
-                response, len(candidates)
-            )
-            if matched_idx is not None:
-                logger.info(
-                    "[CACHE] LLM verified semantic match: "
-                    '"%s" ≈ "%s"',
-                    query,
-                    candidates[matched_idx].query,
+        max_attempts = 2  # retry once on empty response
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = await self._llm_client.complete(
+                    prompt, max_tokens=10
                 )
-                return candidates[matched_idx]
-            logger.debug("[CACHE] LLM: no semantic match for '%s'", query)
-        except TimeoutError:
-            logger.warning("[CACHE] LLM verification timed out for '%s'", query)
-        except Exception:
-            logger.exception("[CACHE] LLM verification failed for '%s'", query)
+                logger.debug(
+                    "[CACHE] L3 raw LLM response (attempt %d): %r",
+                    attempt, response,
+                )
+
+                # Retry on empty/whitespace response
+                if not response or not response.strip():
+                    if attempt < max_attempts:
+                        logger.warning(
+                            "[CACHE] L3 LLM returned empty response "
+                            "(attempt %d/%d), retrying for '%s'",
+                            attempt, max_attempts, query[:80],
+                        )
+                        continue
+                    logger.warning(
+                        "[CACHE] L3 LLM returned empty response after "
+                        "%d attempts for '%s'",
+                        max_attempts, query[:80],
+                    )
+                    return None
+
+                matched_idx = self._parse_semantic_match(
+                    response, len(candidates)
+                )
+                if matched_idx is not None:
+                    logger.info(
+                        "[CACHE] LLM verified semantic match: "
+                        '"%s" ≈ "%s"',
+                        query,
+                        candidates[matched_idx].query,
+                    )
+                    return candidates[matched_idx]
+                logger.debug(
+                    "[CACHE] LLM: no semantic match for '%s' "
+                    "(response=%r)", query[:80], response,
+                )
+                return None
+            except TimeoutError:
+                logger.warning(
+                    "[CACHE] LLM verification timed out for '%s'", query
+                )
+            except Exception:
+                logger.exception(
+                    "[CACHE] LLM verification failed for '%s'", query
+                )
 
         return None
 
