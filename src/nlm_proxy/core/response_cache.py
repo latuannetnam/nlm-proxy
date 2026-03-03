@@ -83,6 +83,16 @@ class ResponseCache:
         # Thread safety
         self._lock = threading.Lock()
 
+        # Stats counters
+        self._stats = {
+            "l1_hits": 0,
+            "l2_hits": 0,
+            "l3_hits": 0,
+            "l3_misses": 0,
+            "misses": 0,
+            "bypasses": 0,
+        }
+
     # ── Hashing ──────────────────────────────────────────────────────────
 
     @staticmethod
@@ -181,6 +191,7 @@ class ResponseCache:
         if bypass_cache:
             logger.debug("[CACHE] L1 BYPASS for '%s'", query[:80])
             self._last_hit_type = None
+            self._stats["bypasses"] += 1
             return None
 
         query_hash = self._compute_hash(notebook_id, query)
@@ -215,6 +226,7 @@ class ResponseCache:
                 query[:80], entry.hit_count, age, len(entry.answer),
             )
             self._last_hit_type = "exact"
+            self._stats["l1_hits"] += 1
             return entry
 
     async def lookup_async(
@@ -234,6 +246,7 @@ class ResponseCache:
         if bypass_cache:
             logger.debug("[CACHE] BYPASS (async) for '%s'", query[:80])
             self._last_hit_type = None
+            self._stats["bypasses"] += 1
             return None
 
         # Layer 1: exact hash match
@@ -244,6 +257,7 @@ class ResponseCache:
         # Layers 2-3 only if semantic matching is enabled
         if not self._semantic_enabled:
             logger.debug("[CACHE] Semantic matching disabled, skipping L2/L3")
+            self._stats["misses"] += 1
             return None
 
         # Layer 2: compute embedding and find similar
@@ -251,11 +265,13 @@ class ResponseCache:
         query_emb = self._compute_embedding(query)
         if query_emb is None:
             logger.debug("[CACHE] L2 embedding failed, skipping")
+            self._stats["misses"] += 1
             return None
 
         candidates = self._find_similar(query_emb, notebook_id)
         if not candidates:
             logger.debug("[CACHE] L2 MISS — no similar entries for '%s'", query[:80])
+            self._stats["misses"] += 1
             return None
 
         # Check if early termination (similarity >= exact threshold)
@@ -268,6 +284,7 @@ class ResponseCache:
                 candidates[0][0], query[:60], entry.query[:60],
             )
             self._last_hit_type = "semantic"
+            self._stats["l2_hits"] += 1
             return entry
 
         # Layer 3: LLM verification
@@ -286,10 +303,13 @@ class ResponseCache:
                 query[:60], matched.query[:60],
             )
             self._last_hit_type = "semantic"
+            self._stats["l3_hits"] += 1
             return matched
 
         logger.info("[CACHE] L3 MISS — LLM found no match for '%s'", query[:80])
         self._last_hit_type = None
+        self._stats["l3_misses"] += 1
+        self._stats["misses"] += 1
         return None
 
     # ── Invalidation ─────────────────────────────────────────────────────
@@ -322,6 +342,8 @@ class ResponseCache:
             self._lru_order.clear()
             self._notebook_matrices.clear()
             self._matrix_dirty.clear()
+            for key in self._stats:
+                self._stats[key] = 0
 
         logger.info("[CACHE] All entries cleared")
 
@@ -637,3 +659,28 @@ class ResponseCache:
     def notebook_count(self) -> int:
         """Number of notebooks with cached entries."""
         return len(self._cache_by_notebook)
+
+    def get_stats(self) -> dict:
+        """Return cache statistics including hit/miss counters."""
+        with self._lock:
+            total_hits = (
+                self._stats["l1_hits"]
+                + self._stats["l2_hits"]
+                + self._stats["l3_hits"]
+            )
+            total_lookups = total_hits + self._stats["misses"]
+            hit_rate = (
+                (total_hits / total_lookups * 100) if total_lookups > 0 else 0.0
+            )
+            return {
+                "total_hits": total_hits,
+                "total_misses": self._stats["misses"],
+                "total_bypasses": self._stats["bypasses"],
+                "hit_rate": round(hit_rate, 1),
+                "l1_hits": self._stats["l1_hits"],
+                "l2_hits": self._stats["l2_hits"],
+                "l3_hits": self._stats["l3_hits"],
+                "l3_misses": self._stats["l3_misses"],
+                "entry_count": len(self._cache_by_hash),
+                "notebook_count": len(self._cache_by_notebook),
+            }

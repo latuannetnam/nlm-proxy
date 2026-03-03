@@ -886,14 +886,14 @@ async def cache_stats():
         }
 
     cache = app.state.response_cache
-    return {
+    stats = cache.get_stats()
+    stats.update({
         "enabled": True,
-        "entry_count": cache.entry_count,
-        "notebook_count": cache.notebook_count,
         "max_entries": cache._max_entries,
         "ttl_seconds": cache._ttl_seconds,
         "semantic_enabled": cache._semantic_enabled,
-    }
+    })
+    return stats
 
 
 @app.delete("/v1/cache", dependencies=[Depends(verify_api_key)])
