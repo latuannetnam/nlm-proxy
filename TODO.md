@@ -2,7 +2,7 @@
 
 ## 🚧 In Progress
 - [] Refactor client.py: file too large
-- [ ] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks: Memory management, Response caching, Cross-notebook query support
+- [ ] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks: Memory management, Response caching, Cross-notebook query support: docs\plans\2026-03-03-langchain-refactor-design.md  
 - [] Add support for Cloud-based embedding model (for example OpenAI, Gemini, Cohere, etc): local model work good enough for now
 - [ ] Enhance conversation management
 - [ ] **Scalability**: Loadbalancing request to multiple NotebookLM account (each Pro account has maximum 500 chat request/day): docs\plans\nlm-proxy-account-pool-specification.md
