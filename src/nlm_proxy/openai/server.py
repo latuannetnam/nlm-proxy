@@ -248,9 +248,9 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
                         yield f"data: {openai_chunk.model_dump_json()}\n\n"
 
         # Store in response cache for NLM streaming responses
+        # Note: all turns are cached because client rewrites follow-ups into standalone questions
         if (
             response_source == "notebooklm"
-            and is_first_turn
             and app.state.response_cache
             and accumulated_response
             and conversation_id
@@ -372,6 +372,10 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
             # Cache check after routing (knowledge queries only)
             if not request.bypass_cache and app.state.response_cache and decision.request_type == RequestType.NOTEBOOKLM:
+                logger.debug(
+                    "[CACHE] Checking cache: query='%s', notebook=%s, is_first_turn=%s",
+                    query[:80], decision.notebook_id[:12], is_first_turn,
+                )
                 cache_result = await app.state.response_cache.lookup_async(decision.notebook_id, query)
                 if cache_result:
                     hit_type = app.state.response_cache._last_hit_type or "exact"
@@ -452,6 +456,10 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
             else:
                 # Cache check before NLM query (non-streaming)
                 if not request.bypass_cache and app.state.response_cache:
+                    logger.debug(
+                        "[CACHE] Checking cache: query='%s', notebook=%s, is_first_turn=%s",
+                        query[:80], decision.notebook_id[:12], is_first_turn,
+                    )
                     cache_result = await app.state.response_cache.lookup_async(decision.notebook_id, query)
                     if cache_result:
                         hit_type = app.state.response_cache._last_hit_type or "exact"
@@ -499,7 +507,12 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                     logger.info(f"session_not_saved: chat_id={chat_id}, reason=no_conversation_id_from_nlm")
 
                 # Store in response cache (with embedding)
-                if is_first_turn and app.state.response_cache and response_text and conv_id:
+                # Note: all turns are cached because client rewrites follow-ups into standalone questions
+                if app.state.response_cache and response_text and conv_id:
+                    logger.debug(
+                        "[CACHE] Storing response: query='%s', notebook=%s, is_first_turn=%s",
+                        query[:80], decision.notebook_id[:12], is_first_turn,
+                    )
                     embedding = None
                     if app.state.response_cache._semantic_enabled:
                         emb = app.state.response_cache._compute_embedding(query)
@@ -628,7 +641,12 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
         logger.debug("[PROXY] Stream finished")
 
         # Store in response cache after streaming (with embedding)
-        if is_first_turn and app.state.response_cache and previous_answer and conversation_id:
+        # Note: all turns are cached because client rewrites follow-ups into standalone questions
+        if app.state.response_cache and previous_answer and conversation_id:
+            logger.debug(
+                "[CACHE] Storing streamed response: query='%s', notebook=%s, is_first_turn=%s, answer_len=%d",
+                query_text[:80], notebook_id[:12], is_first_turn, len(previous_answer),
+            )
             embedding = None
             if app.state.response_cache._semantic_enabled:
                 emb = app.state.response_cache._compute_embedding(query_text)
@@ -806,8 +824,13 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
             system_fingerprint=f"conv_{conv_id}" if conv_id else None
         )
 
-        # Store in response cache for first-turn queries (with embedding)
-        if is_first_turn and app.state.response_cache and answer and conv_id:
+        # Store in response cache (with embedding)
+        # Note: all turns are cached because client rewrites follow-ups into standalone questions
+        if app.state.response_cache and answer and conv_id:
+            logger.debug(
+                "[CACHE] Storing response: query='%s', notebook=%s, is_first_turn=%s",
+                query_text[:80], request.model[:12], is_first_turn,
+            )
             embedding = None
             if app.state.response_cache._semantic_enabled:
                 emb = app.state.response_cache._compute_embedding(query_text)
