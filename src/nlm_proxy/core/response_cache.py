@@ -88,6 +88,16 @@ class ResponseCache:
         if self._semantic_enabled and self._embedding_model_name:
             self._load_embedding_model()
 
+        # Warn if low threshold without LLM verification
+        if self._similarity_threshold < 0.7 and self._llm_client is None:
+            logger.warning(
+                "[CACHE] L2 threshold (%.2f) is below 0.7 but no LLM client "
+                "configured for L3 verification. Semantic matching may produce "
+                "false positives. Consider raising threshold to 0.7+ or "
+                "configuring an LLM client.",
+                self._similarity_threshold,
+            )
+
         # Thread safety
         self._lock = threading.Lock()
 

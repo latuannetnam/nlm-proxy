@@ -366,6 +366,33 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
             query = user_messages[-1].content
 
+            # Phase 1: Pre-routing global L1 check (instant, skips routing)
+            if not request.bypass_cache and app.state.response_cache:
+                cache_result = app.state.response_cache.lookup_global(query)
+                if cache_result:
+                    cached_notebook_id = cache_result.notebook_id
+                    # ACL check: is the cached notebook accessible?
+                    if request_allowed_notebooks is None or cached_notebook_id in request_allowed_notebooks:
+                        hit_type = app.state.response_cache._last_hit_type or "exact"
+                        logger.info(
+                            "[CACHE] Pre-routing L1 HIT: query='%s', notebook=%s (skipped routing)",
+                            query[:80], cached_notebook_id[:12],
+                        )
+                        await router.close()
+                        await client.close()
+                        return StreamingResponse(
+                            stream_cached_smart(cache_result, hit_type,
+                                                reasoning="Pre-routing cache hit \u2014 returning cached response (skipped routing)."),
+                            media_type="text/event-stream",
+                            headers={"X-Cache-Status": f"HIT_PRE_ROUTING_{hit_type.upper()}"},
+                        )
+                    else:
+                        logger.debug(
+                            "[CACHE] Pre-routing L1 HIT but notebook %s not in allowed list, falling through",
+                            cached_notebook_id[:12],
+                        )
+
+            # Phase 2: Route normally (only reached on Phase 1 miss)
             decision = await router.route(query, allowed_notebooks=request_allowed_notebooks)
 
             logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
@@ -442,6 +469,50 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
             if tracing_settings.request_max_length > 0:
                 add_span_attributes(user_query=query[:tracing_settings.request_max_length])
 
+            # Phase 1: Pre-routing global L1 check (instant, skips routing)
+            if not request.bypass_cache and app.state.response_cache:
+                cache_result = app.state.response_cache.lookup_global(query)
+                if cache_result:
+                    cached_notebook_id = cache_result.notebook_id
+                    # ACL check: is the cached notebook accessible?
+                    if request_allowed_notebooks is None or cached_notebook_id in request_allowed_notebooks:
+                        hit_type = app.state.response_cache._last_hit_type or "exact"
+                        logger.info(
+                            "[CACHE] Pre-routing L1 HIT (non-stream): query='%s', notebook=%s (skipped routing)",
+                            query[:80], cached_notebook_id[:12],
+                        )
+                        from fastapi.responses import JSONResponse
+                        resp = ChatCompletionResponse(
+                            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                            created=int(time.time()),
+                            model=request.model,
+                            choices=[ResponseChoice(
+                                index=0,
+                                message=ResponseMessage(
+                                    role="assistant",
+                                    content=cache_result.answer,
+                                    reasoning_content="Pre-routing cache hit \u2014 returning cached response (skipped routing).",
+                                ),
+                                finish_reason="stop"
+                            )],
+                            usage=Usage(
+                                prompt_tokens=len(query),
+                                completion_tokens=len(cache_result.answer),
+                                total_tokens=len(query) + len(cache_result.answer),
+                            ),
+                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                        )
+                        return JSONResponse(
+                            content=resp.model_dump(),
+                            headers={"X-Cache-Status": f"HIT_PRE_ROUTING_{hit_type.upper()}"},
+                        )
+                    else:
+                        logger.debug(
+                            "[CACHE] Pre-routing L1 HIT but notebook %s not in allowed list, falling through",
+                            cached_notebook_id[:12],
+                        )
+
+            # Phase 2: Route normally (only reached on Phase 1 miss)
             decision = await router.route(query, allowed_notebooks=request_allowed_notebooks)
 
             logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
