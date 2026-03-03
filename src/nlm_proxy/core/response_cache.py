@@ -76,9 +76,11 @@ class ResponseCache:
         self._notebook_matrices: dict[str, object] = {}  # np.ndarray
         self._matrix_dirty: dict[str, bool] = {}
 
-        # Embedding model (loaded lazily)
+        # Embedding model
         self._embedding_model_name = embedding_model
         self._embedding_model_instance = None
+        if self._semantic_enabled and self._embedding_model_name:
+            self._load_embedding_model()
 
         # Thread safety
         self._lock = threading.Lock()
@@ -467,33 +469,28 @@ class ResponseCache:
             )
             return result
 
+    def _load_embedding_model(self) -> None:
+        """Load the fastembed embedding model."""
+        try:
+            from fastembed import TextEmbedding
+            self._embedding_model_instance = TextEmbedding(
+                self._embedding_model_name
+            )
+            logger.info(
+                "[CACHE] Embedding model loaded: %s",
+                self._embedding_model_name,
+            )
+        except Exception:
+            logger.exception("[CACHE] Failed to load embedding model")
+            self._semantic_enabled = False
+
     def _compute_embedding(self, query: str) -> object | None:
         """Compute query embedding using fastembed model.
 
         Returns numpy array or None if embedding model is not available.
         """
         if self._embedding_model_instance is None:
-            if not self._embedding_model_name:
-                return None
-            try:
-                from fastembed import TextEmbedding
-                self._embedding_model_instance = TextEmbedding(
-                    self._embedding_model_name
-                )
-                logger.info(
-                    "[CACHE] Embedding model loaded: %s",
-                    self._embedding_model_name,
-                )
-            except ImportError:
-                logger.info(
-                    "[CACHE] fastembed not installed, semantic matching disabled"
-                )
-                self._semantic_enabled = False
-                return None
-            except Exception:
-                logger.exception("[CACHE] Failed to load embedding model")
-                self._semantic_enabled = False
-                return None
+            return None
 
         import numpy as np
         try:
