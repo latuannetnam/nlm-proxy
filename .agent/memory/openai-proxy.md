@@ -50,7 +50,7 @@ nlm-proxy serve openai --host 127.0.0.1 --port 8000
 ## Endpoints
 
 | Endpoint | Purpose |
-|----------|---------|
+|----------|---------| 
 | `POST /v1/chat/completions` | Chat (streaming + non-streaming) |
 | `GET /v1/models` | List notebooks as models |
 | `POST /v1/embeddings` | Returns 501 |
@@ -58,6 +58,9 @@ nlm-proxy serve openai --host 127.0.0.1 --port 8000
 | `GET /v1/sessions` | List active sessions |
 | `DELETE /v1/sessions/{chat_id}` | Delete session |
 | `GET /v1/sessions/stats` | Session statistics |
+| `GET /v1/cache/stats` | Cache hit/miss metrics |
+| `DELETE /v1/cache` | Clear all cache entries |
+| `DELETE /v1/cache/{notebook_id}` | Clear notebook cache |
 
 ## Session Persistence
 
@@ -97,5 +100,9 @@ for chunk in response:
 
 Pass via `extra_body`:
 ```python
-extra_body={"conversation_id": "prev-id", "include_thinking": True}
+extra_body={
+    "conversation_id": "prev-id",
+    "include_thinking": True,
+    "bypass_cache": True,  # Skip response cache, fetch fresh answer
+}
 ```

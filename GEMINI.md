@@ -38,6 +38,12 @@ nlm-proxy auth test                     # Verify authentication
 # === Testing ===
 uv run pytest                           # Run all tests
 
+# === Cache Monitor ===
+.\scripts\cache-stats.ps1               # Cache stats (PowerShell)
+.\scripts\cache-stats.ps1 -Watch        # Auto-refresh mode
+./scripts/cache-stats.sh                # Cache stats (Bash)
+./scripts/cache-stats.sh --watch        # Auto-refresh mode
+
 # === Tracing Infrastructure ===
 docker compose -f docker-compose.otel.yml up -d  # Start basic stack (dev)
 docker compose -f docker-compose.otel-secure.yml up -d  # Secure stack (prod)

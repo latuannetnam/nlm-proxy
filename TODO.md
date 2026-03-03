@@ -1,10 +1,13 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress
+- [Doing] **Performance**Response Cache: docs\plans\2026-03-02-response-cache-implementation.md
+- [] **Monitoring** Montior Response Cache metrics
+- [ ] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks: Memory management, Response caching, Cross-notebook query support
+- [] Refactor client.py: file too large
 - [ ] Enhance conversation management
 - [ ] Migrate Claude memory to Antigravity
 - [ ] **Scalability**: Loadbalancing request to multiple NotebookLM account (each Pro account has maximum 500 chat request/day): docs\plans\nlm-proxy-account-pool-specification.md
-- [ ] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks
 - [ ] **Pre-processing**: Use LLM task to pre-process in individual notebook models
 - [ ] **Authentication**: Support multiple authentication profiles
 - [ ] **Async Session Management**: Review FastAPI support for SessionStore and Notebook cache

@@ -16,6 +16,7 @@ Unified configuration using pydantic-settings with precedence:
 | `LoggingSettings` | `NLM_PROXY_LOG_` | Logging settings |
 | `SmartRoutingSettings` | `NLM_PROXY_ROUTING_` | Smart routing and source fetching |
 | `TracingSettings` | `NLM_PROXY_OTEL_` | OpenTelemetry tracing settings |
+| `CacheSettings` | `NLM_PROXY_CACHE_` | Response cache settings |
 
 ## Environment Variables
 
@@ -62,6 +63,16 @@ NLM_PROXY_OTEL_VERIFY_CERT=true  # Skip cert validation (HTTP only)
 NLM_PROXY_OTEL_CA_CERT_PATH=  # Path to custom CA certificate
 NLM_PROXY_OTEL_REQUEST_MAX_LENGTH=500  # max chars of user query (0=disable)
 NLM_PROXY_OTEL_RESPONSE_MAX_LENGTH=1000  # max chars of response (0=disable)
+
+# Response Cache
+NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED=true
+NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400          # 4 hours
+NLM_PROXY_CACHE_RESPONSE_CACHE_MAX_ENTRIES=1000
+NLM_PROXY_CACHE_SEMANTIC_MATCH_ENABLED=true
+NLM_PROXY_CACHE_EMBEDDING_MODEL=intfloat/multilingual-e5-small
+NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.7
+NLM_PROXY_CACHE_SIMILARITY_EXACT_THRESHOLD=0.95
+NLM_PROXY_CACHE_SEMANTIC_MATCH_TOP_K=10
 ```
 
 ## Tracing Authentication & TLS
