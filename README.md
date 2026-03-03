@@ -107,22 +107,26 @@ response = client.chat.completions.create(
 See [Smart Routing Architecture](docs/smart-routing-architecture.md) for details.
 
 ### Response Cache
-Three-layer cache that eliminates 40-50s latency for repeated queries:
+Four-layer cache that eliminates 40-50s latency for repeated and semantically similar queries:
 
 | Layer | Method | Speed |
 |-------|--------|-------|
+| **Pre-routing L1** | Global query hash (skips routing entirely) | Instant |
 | **Exact Match** | Hash-based lookup with LRU eviction and TTL | Instant |
-| **Embedding Pre-filter** | Multilingual vector similarity (fastembed) | ~10ms |
+| **Embedding Pre-filter** | Multilingual vector similarity (fastembed MiniLM) | ~10ms |
 | **LLM Verification** | Semantic match confirmation via external LLM | ~1s |
 
+- **Alias creation**: L2/L3 semantic matches are aliased for instant L1 hits on repeat
 - Auto-invalidates when notebook sources change
 - Per-request bypass via `bypass_cache` parameter
-- `X-Cache-Status: HIT` header on cached responses
+- `X-Cache-Status` header: `HIT_PRE_ROUTING_EXACT`, `HIT_EXACT`, `HIT_SEMANTIC`, `MISS`, `BYPASS`
 
 ```bash
 # Enable (on by default)
 NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED=true
-NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400  # 4 hours
+NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400         # 4 hours
+NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.5          # L2 pre-filter (L3 verifies)
+NLM_PROXY_CACHE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```
 
 ## Installation
@@ -365,6 +369,9 @@ response = client.chat.completions.create(
 | `POST /v1/chat/completions` | Chat with a notebook (streaming/non-streaming) |
 | `POST /v1/embeddings` | Returns 501 (not supported) |
 | `GET /health` | Health check |
+| `GET /v1/cache/stats` | Cache hit/miss counters, layer breakdown |
+| `DELETE /v1/cache` | Clear all cache entries |
+| `DELETE /v1/cache/{notebook_id}` | Clear cache for one notebook |
 | `GET /v1/sessions` | List active sessions |
 | `DELETE /v1/sessions/{chat_id}` | Delete specific session |
 | `GET /v1/sessions/stats` | Session statistics |
@@ -428,7 +435,8 @@ NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED=true
 NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400
 NLM_PROXY_CACHE_RESPONSE_CACHE_MAX_ENTRIES=1000
 NLM_PROXY_CACHE_SEMANTIC_MATCH_ENABLED=true
-NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.7
+NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.5
+NLM_PROXY_CACHE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```
 
 ### Usage Examples
@@ -524,8 +532,9 @@ src/nlm_proxy/
 
 Key cache files:
 - `core/config.py` — `CacheSettings` (env prefix: `NLM_PROXY_CACHE_`)
-- `core/response_cache.py` — `ResponseCache` with three-layer lookup
+- `core/response_cache.py` — `ResponseCache` with pre-routing L1, three-layer lookup, alias creation
 - `openai/notebook_cache.py` — Source change detection + auto-invalidation
+- `scripts/cache-log-analyzer.py` — Log analysis tool (`--json`, `--queries`, `--summary`)
 
 ## MCP Tools
 

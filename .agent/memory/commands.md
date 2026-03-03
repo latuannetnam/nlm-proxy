@@ -24,6 +24,10 @@ nlm-proxy auth test       # Verify tokens
 # Run tests
 uv run pytest
 uv run pytest tests/test_file.py::test_function -v
+
+# Cache log analysis
+python scripts/cache-log-analyzer.py --today --queries
+python scripts/cache-log-analyzer.py --json --queries
 ```
 
 ## Configuration via Environment

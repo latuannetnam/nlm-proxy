@@ -43,6 +43,11 @@ uv run pytest                           # Run all tests
 ./scripts/cache-stats.sh                # Cache stats (Bash)
 ./scripts/cache-stats.sh --watch        # Auto-refresh mode
 
+# === Cache Log Analyzer ===
+python scripts/cache-log-analyzer.py --today --queries    # Per-query cache flow
+python scripts/cache-log-analyzer.py --today --summary    # Hit-rate summary
+python scripts/cache-log-analyzer.py --json --queries     # JSON (for scripts/AI)
+
 # === Tracing Infrastructure ===
 docker compose -f docker-compose.otel.yml up -d  # Start basic stack (dev)
 docker compose -f docker-compose.otel-secure.yml up -d  # Secure stack (prod)
@@ -67,7 +72,7 @@ Detailed documentation in `.agent/memory/`:
 | `smart-routing.md` | Smart routing configuration, LLM client, router |
 | `logging.md` | Configuring logs, debugging |
 | `tracing.md` | OpenTelemetry tracing setup, TLS/auth configuration, known issues |
-| `response-cache.md` | Response cache architecture, three-layer lookup, configuration |
+| `response-cache.md` | Response cache architecture, pre-routing L1, aliases, configuration |
 | `troubleshooting.md` | Common errors and fixes |
 
 ## References
