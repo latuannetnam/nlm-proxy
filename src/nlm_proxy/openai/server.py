@@ -139,7 +139,7 @@ async def list_models():
         await client.close()
 
 
-async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest, chat_id: str = None, tracing_settings=None):
+async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest, chat_id: str = None, tracing_settings=None, is_first_turn: bool = False):
     """Stream response with routing reasoning as reasoning_content and response tracing.
 
     Note: This function creates its own span because the span must live for the full
@@ -247,6 +247,29 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
                         )
                         yield f"data: {openai_chunk.model_dump_json()}\n\n"
 
+        # Store in response cache for NLM streaming responses
+        if (
+            response_source == "notebooklm"
+            and is_first_turn
+            and app.state.response_cache
+            and accumulated_response
+            and conversation_id
+            and decision.notebook_id
+        ):
+            embedding = None
+            if app.state.response_cache._semantic_enabled:
+                emb = app.state.response_cache._compute_embedding(query)
+                if emb is not None:
+                    embedding = emb.tolist()
+            app.state.response_cache.store(
+                notebook_id=decision.notebook_id,
+                query=query,
+                answer=accumulated_response,
+                thinking=previous_thinking if response_source == "notebooklm" else None,
+                conversation_id=conversation_id,
+                embedding=embedding,
+            )
+
         # Add response to trace BEFORE final yield (span still open)
         if tracing_settings and tracing_settings.response_max_length > 0:
             span.set_attribute("response_content", accumulated_response[:tracing_settings.response_max_length])
@@ -328,6 +351,9 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
         else:
             logger.info(f"session_lookup: chat_id={chat_id}, conversation_id=None, source={chat_id_source}")
 
+    # First-turn detection for cache check
+    is_first_turn = request.conversation_id is None
+
     # For streaming requests, the generator owns the span (so it lives for full duration)
     # For non-streaming, we create the span here
     if request.stream:
@@ -339,13 +365,59 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 raise HTTPException(status_code=400, detail="No user message found")
 
             query = user_messages[-1].content
+
+            # Cache check before routing (first-turn only)
+            if is_first_turn and not request.bypass_cache and app.state.response_cache:
+                cache_result = await app.state.response_cache.lookup_async(request.model, query)
+                if cache_result:
+                    hit_type = app.state.response_cache._last_hit_type or "exact"
+                    async def stream_cached_smart(cache_result, hit_type, reasoning="Cache hit — returning cached response."):
+                        chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+                        created = int(time.time())
+                        # Reasoning chunk
+                        reasoning_chunk = ChatCompletionChunk(
+                            id=chunk_id, created=created, model=request.model,
+                            choices=[Choice(delta=DeltaContent(reasoning_content=reasoning + "\n\n"))],
+                        )
+                        yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
+                        # Thinking chunk (if available)
+                        if cache_result.thinking and request.include_thinking:
+                            thinking_chunk = ChatCompletionChunk(
+                                id=chunk_id, created=created, model=request.model,
+                                choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
+                                system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                            )
+                            yield f"data: {thinking_chunk.model_dump_json()}\n\n"
+                        # Answer chunk
+                        answer_chunk = ChatCompletionChunk(
+                            id=chunk_id, created=created, model=request.model,
+                            choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
+                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                        )
+                        yield f"data: {answer_chunk.model_dump_json()}\n\n"
+                        # Final chunk
+                        final_chunk = ChatCompletionChunk(
+                            id=chunk_id, created=created, model=request.model,
+                            choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
+                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                        )
+                        yield f"data: {final_chunk.model_dump_json()}\n\n"
+                        yield "data: [DONE]\n\n"
+                    await router.close()
+                    await client.close()
+                    return StreamingResponse(
+                        stream_cached_smart(cache_result, hit_type),
+                        media_type="text/event-stream",
+                        headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
+                    )
+
             decision = await router.route(query, allowed_notebooks=request_allowed_notebooks)
 
             logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
 
             # Streaming: generator creates its own span to capture response
             return StreamingResponse(
-                stream_smart_response(client, router, decision, query, request, chat_id, tracing_settings),
+                stream_smart_response(client, router, decision, query, request, chat_id, tracing_settings, is_first_turn),
                 media_type="text/event-stream"
             )
         except Exception:
@@ -378,6 +450,37 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 )
                 response_source = "llm"
             else:
+                # Cache check before NLM query (non-streaming, first-turn only)
+                if is_first_turn and not request.bypass_cache and app.state.response_cache:
+                    cache_result = await app.state.response_cache.lookup_async(request.model, query)
+                    if cache_result:
+                        hit_type = app.state.response_cache._last_hit_type or "exact"
+                        from fastapi.responses import JSONResponse
+                        resp = ChatCompletionResponse(
+                            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                            created=int(time.time()),
+                            model=request.model,
+                            choices=[ResponseChoice(
+                                index=0,
+                                message=ResponseMessage(
+                                    role="assistant",
+                                    content=cache_result.answer,
+                                    reasoning_content=decision.reasoning,
+                                ),
+                                finish_reason="stop"
+                            )],
+                            usage=Usage(
+                                prompt_tokens=len(query),
+                                completion_tokens=len(cache_result.answer),
+                                total_tokens=len(query) + len(cache_result.answer),
+                            ),
+                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                        )
+                        return JSONResponse(
+                            content=resp.model_dump(),
+                            headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
+                        )
+
                 # Call NotebookLM with conversation_id for continuity
                 result = await client.query(
                     notebook_id=decision.notebook_id,
@@ -394,6 +497,22 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                     logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conv_id}")
                 elif chat_id and not conv_id:
                     logger.info(f"session_not_saved: chat_id={chat_id}, reason=no_conversation_id_from_nlm")
+
+                # Store in response cache (with embedding)
+                if is_first_turn and app.state.response_cache and response_text and conv_id:
+                    embedding = None
+                    if app.state.response_cache._semantic_enabled:
+                        emb = app.state.response_cache._compute_embedding(query)
+                        if emb is not None:
+                            embedding = emb.tolist()
+                    app.state.response_cache.store(
+                        notebook_id=decision.notebook_id,
+                        query=query,
+                        answer=response_text,
+                        thinking=None,
+                        conversation_id=conv_id,
+                        embedding=embedding,
+                    )
 
             # Add response to trace
             if tracing_settings.response_max_length > 0:
@@ -427,7 +546,7 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
             await client.close()
 
 
-async def stream_response(client, notebook_id: str, query_text: str, request: ChatCompletionRequest, chat_id: str = None):
+async def stream_response(client, notebook_id: str, query_text: str, request: ChatCompletionRequest, chat_id: str = None, is_first_turn: bool = False):
     """Generate OpenAI-compatible SSE stream from NotebookLM query_stream."""
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
@@ -507,6 +626,22 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
         yield f"data: {final_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
         logger.debug("[PROXY] Stream finished")
+
+        # Store in response cache after streaming (with embedding)
+        if is_first_turn and app.state.response_cache and previous_answer and conversation_id:
+            embedding = None
+            if app.state.response_cache._semantic_enabled:
+                emb = app.state.response_cache._compute_embedding(query_text)
+                if emb is not None:
+                    embedding = emb.tolist()
+            app.state.response_cache.store(
+                notebook_id=notebook_id,
+                query=query_text,
+                answer=previous_answer,
+                thinking=previous_thinking or None,
+                conversation_id=conversation_id,
+                embedding=embedding,
+            )
     finally:
         await client.close()
 
@@ -560,36 +695,72 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
             is_first_turn = False
 
     if is_first_turn and not request.bypass_cache and app.state.response_cache:
-        cache_result = app.state.response_cache.lookup(request.model, query_text)
+        cache_result = await app.state.response_cache.lookup_async(request.model, query_text)
         if cache_result:
-            response = ChatCompletionResponse(
-                id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                created=int(time.time()),
-                model=request.model,
-                choices=[ResponseChoice(
-                    index=0,
-                    message=ResponseMessage(role="assistant", content=cache_result.answer),
-                    finish_reason="stop"
-                )],
-                usage=Usage(
-                    prompt_tokens=len(query_text),
-                    completion_tokens=len(cache_result.answer),
-                    total_tokens=len(query_text) + len(cache_result.answer),
-                ),
-                system_fingerprint="cache_hit",
-            )
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                content=response.model_dump(),
-                headers={"X-Cache-Status": "HIT"},
-            )
+            hit_type = app.state.response_cache._last_hit_type or "exact"
+            if request.stream:
+                # Streaming cache HIT: yield cached answer as SSE chunks
+                async def stream_cached_response(cache_result, hit_type):
+                    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+                    created = int(time.time())
+                    # Thinking chunk (if available)
+                    if cache_result.thinking and request.include_thinking:
+                        thinking_chunk = ChatCompletionChunk(
+                            id=chunk_id, created=created, model=request.model,
+                            choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
+                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                        )
+                        yield f"data: {thinking_chunk.model_dump_json()}\n\n"
+                    # Answer chunk
+                    answer_chunk = ChatCompletionChunk(
+                        id=chunk_id, created=created, model=request.model,
+                        choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
+                        system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                    )
+                    yield f"data: {answer_chunk.model_dump_json()}\n\n"
+                    # Final chunk
+                    final_chunk = ChatCompletionChunk(
+                        id=chunk_id, created=created, model=request.model,
+                        choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
+                        system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                    )
+                    yield f"data: {final_chunk.model_dump_json()}\n\n"
+                    yield "data: [DONE]\n\n"
+                return StreamingResponse(
+                    stream_cached_response(cache_result, hit_type),
+                    media_type="text/event-stream",
+                    headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
+                )
+            else:
+                # Non-streaming cache HIT
+                response = ChatCompletionResponse(
+                    id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                    created=int(time.time()),
+                    model=request.model,
+                    choices=[ResponseChoice(
+                        index=0,
+                        message=ResponseMessage(role="assistant", content=cache_result.answer),
+                        finish_reason="stop"
+                    )],
+                    usage=Usage(
+                        prompt_tokens=len(query_text),
+                        completion_tokens=len(cache_result.answer),
+                        total_tokens=len(query_text) + len(cache_result.answer),
+                    ),
+                    system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                )
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    content=response.model_dump(),
+                    headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
+                )
 
     client = await get_client()
 
     if request.stream:
         logger.debug("[PROXY] Using streaming response")
         return StreamingResponse(
-            stream_response(client, request.model, query_text, request, chat_id),
+            stream_response(client, request.model, query_text, request, chat_id, is_first_turn),
             media_type="text/event-stream"
         )
 
@@ -635,14 +806,20 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
             system_fingerprint=f"conv_{conv_id}" if conv_id else None
         )
 
-        # Store in response cache for first-turn queries
+        # Store in response cache for first-turn queries (with embedding)
         if is_first_turn and app.state.response_cache and answer and conv_id:
+            embedding = None
+            if app.state.response_cache._semantic_enabled:
+                emb = app.state.response_cache._compute_embedding(query_text)
+                if emb is not None:
+                    embedding = emb.tolist()
             app.state.response_cache.store(
                 notebook_id=request.model,
                 query=query_text,
                 answer=answer,
                 thinking=None,
                 conversation_id=conv_id,
+                embedding=embedding,
             )
 
         logger.debug(f"[PROXY] Returning response with {len(answer)} characters")
@@ -725,6 +902,7 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
                 ttl_seconds=cache_settings.response_cache_ttl,
                 semantic_enabled=cache_settings.semantic_match_enabled,
                 llm_client=llm_client,
+                embedding_model=cache_settings.embedding_model,
                 similarity_threshold=cache_settings.similarity_threshold,
                 similarity_exact_threshold=cache_settings.similarity_exact_threshold,
                 top_k=cache_settings.semantic_match_top_k,

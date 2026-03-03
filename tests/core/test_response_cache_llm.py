@@ -65,7 +65,7 @@ class TestLLMVerification:
         import time
 
         mock_llm = AsyncMock()
-        mock_llm.chat.return_value = "1"  # LLM says candidate 1 matches
+        mock_llm.complete.return_value = "1"  # LLM says candidate 1 matches
 
         cache = ResponseCache(
             max_entries=10, ttl_seconds=3600,
@@ -93,7 +93,7 @@ class TestLLMVerification:
         import time
 
         mock_llm = AsyncMock()
-        mock_llm.chat.return_value = "-1"
+        mock_llm.complete.return_value = "-1"
 
         cache = ResponseCache(
             max_entries=10, ttl_seconds=3600,
@@ -120,7 +120,7 @@ class TestLLMVerification:
         import time
 
         mock_llm = AsyncMock()
-        mock_llm.chat.side_effect = TimeoutError("LLM timeout")
+        mock_llm.complete.side_effect = TimeoutError("LLM timeout")
 
         cache = ResponseCache(
             max_entries=10, ttl_seconds=3600,

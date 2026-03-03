@@ -62,6 +62,9 @@ class ResponseCache:
         self._similarity_exact_threshold = similarity_exact_threshold
         self._top_k = top_k
 
+        # Last lookup result type: 'exact', 'semantic', or None
+        self._last_hit_type: str | None = None
+
         # Layer 1: hash → CachedResponse
         self._cache_by_hash: dict[str, CachedResponse] = {}
         # Notebook partition: notebook_id → list of CachedResponse
@@ -177,6 +180,7 @@ class ResponseCache:
         """
         if bypass_cache:
             logger.debug("[CACHE] L1 BYPASS for '%s'", query[:80])
+            self._last_hit_type = None
             return None
 
         query_hash = self._compute_hash(notebook_id, query)
@@ -210,6 +214,7 @@ class ResponseCache:
                 "[CACHE] L1 HIT for '%s' (hits=%d, age=%.0fs, answer_len=%d)",
                 query[:80], entry.hit_count, age, len(entry.answer),
             )
+            self._last_hit_type = "exact"
             return entry
 
     async def lookup_async(
@@ -228,6 +233,7 @@ class ResponseCache:
         """
         if bypass_cache:
             logger.debug("[CACHE] BYPASS (async) for '%s'", query[:80])
+            self._last_hit_type = None
             return None
 
         # Layer 1: exact hash match
@@ -261,6 +267,7 @@ class ResponseCache:
                 "[CACHE] L2 HIT (sim=%.4f, skip-LLM) for '%s' → '%s'",
                 candidates[0][0], query[:60], entry.query[:60],
             )
+            self._last_hit_type = "semantic"
             return entry
 
         # Layer 3: LLM verification
@@ -278,9 +285,11 @@ class ResponseCache:
                 "[CACHE] L3 HIT (LLM-verified) for '%s' → '%s'",
                 query[:60], matched.query[:60],
             )
+            self._last_hit_type = "semantic"
             return matched
 
         logger.info("[CACHE] L3 MISS — LLM found no match for '%s'", query[:80])
+        self._last_hit_type = None
         return None
 
     # ── Invalidation ─────────────────────────────────────────────────────
@@ -562,7 +571,7 @@ class ResponseCache:
         prompt = self._build_verification_prompt(query, cached_queries)
 
         try:
-            response = await self._llm_client.chat(prompt)
+            response = await self._llm_client.complete(prompt, max_tokens=10)
             matched_idx = self._parse_semantic_match(
                 response, len(candidates)
             )

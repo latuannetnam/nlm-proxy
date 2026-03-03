@@ -24,7 +24,7 @@ class TestFullCacheLookup:
 
         assert result is not None
         assert result.answer == "answer"
-        mock_llm.chat.assert_not_called()  # L3 not invoked
+        mock_llm.complete.assert_not_called()  # L3 not invoked
 
     @pytest.mark.asyncio
     async def test_l2_no_candidates_skips_l3(self):
@@ -41,7 +41,7 @@ class TestFullCacheLookup:
         result = await cache.lookup_async("nb-1", "key points?")
 
         assert result is None
-        mock_llm.chat.assert_not_called()
+        mock_llm.complete.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_l2_high_similarity_skips_l3(self):
@@ -64,7 +64,7 @@ class TestFullCacheLookup:
             result = await cache.lookup_async("nb-1", "key points rephrased?")
 
         assert result is not None
-        mock_llm.chat.assert_not_called()  # Skipped L3
+        mock_llm.complete.assert_not_called()  # Skipped L3
 
     @pytest.mark.asyncio
     async def test_semantic_disabled_only_l1(self):
