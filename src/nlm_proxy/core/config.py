@@ -267,7 +267,7 @@ class CacheSettings(BaseSettings):
         default=True, description="Enable semantic matching"
     )
     embedding_model: str = Field(
-        default="intfloat/multilingual-e5-small",
+        default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         description="fastembed model for embeddings",
     )
     similarity_threshold: float = Field(
