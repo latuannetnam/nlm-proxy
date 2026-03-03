@@ -67,10 +67,16 @@ class ResponseCache:
 
         # Layer 1: hash → CachedResponse
         self._cache_by_hash: dict[str, CachedResponse] = {}
+        # Global index: query-only hash → CachedResponse (no notebook_id)
+        self._global_hash_index: dict[str, CachedResponse] = {}
         # Notebook partition: notebook_id → list of CachedResponse
         self._cache_by_notebook: dict[str, list[CachedResponse]] = {}
         # LRU ordering: list of hash keys, most recent at end
         self._lru_order: list[str] = []
+
+        # Alias tracking (aliases not counted in LRU capacity)
+        self._alias_hashes: set[str] = set()         # notebook-scoped alias hashes
+        self._alias_global_hashes: set[str] = set()   # global alias hashes
 
         # Layer 2: NumPy matrices per notebook (lazy build)
         self._notebook_matrices: dict[str, object] = {}  # np.ndarray
@@ -87,6 +93,7 @@ class ResponseCache:
 
         # Stats counters
         self._stats = {
+            "pre_routing_l1_hits": 0,
             "l1_hits": 0,
             "l2_hits": 0,
             "l3_hits": 0,
@@ -102,6 +109,62 @@ class ResponseCache:
         """Compute deterministic hash key from notebook_id + normalized query."""
         normalized = f"{notebook_id}:{query.strip().lower()}"
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _compute_global_hash(query: str) -> str:
+        """Compute hash on query only (no notebook_id) for pre-routing lookup."""
+        normalized = query.strip().lower()
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    # ── Pre-routing Global L1 ────────────────────────────────────────────
+
+    def lookup_global(self, query: str) -> CachedResponse | None:
+        """Pre-routing L1 lookup: find cached entry by query only (no notebook_id).
+
+        Returns CachedResponse on hit (caller must validate notebook ACL),
+        None on miss.
+        """
+        global_hash = self._compute_global_hash(query)
+        with self._lock:
+            entry = self._global_hash_index.get(global_hash)
+            if entry is None:
+                return None
+            # Check TTL
+            age = time.time() - entry.cached_at
+            if age > self._ttl_seconds:
+                logger.debug("[CACHE] Global L1 EXPIRED for '%s'", query[:80])
+                return None
+            entry.hit_count += 1
+            logger.info(
+                "[CACHE] Global L1 HIT for '%s' (notebook=%s, hits=%d, age=%.0fs)",
+                query[:80], entry.notebook_id[:12], entry.hit_count, age,
+            )
+            self._last_hit_type = "exact"
+            self._stats["pre_routing_l1_hits"] += 1
+            return entry
+
+    # ── Alias Creation ────────────────────────────────────────────────────
+
+    def create_alias(
+        self, notebook_id: str, new_query: str, target_entry: CachedResponse
+    ) -> None:
+        """Create L1 alias: new query → existing cached entry.
+
+        Aliases are NOT counted in LRU capacity.
+        """
+        alias_hash = self._compute_hash(notebook_id, new_query)
+        global_hash = self._compute_global_hash(new_query)
+
+        with self._lock:
+            self._cache_by_hash[alias_hash] = target_entry
+            self._global_hash_index[global_hash] = target_entry
+            self._alias_hashes.add(alias_hash)
+            self._alias_global_hashes.add(global_hash)
+
+        logger.info(
+            "[CACHE] Alias created: '%s' → '%s' (notebook=%s)",
+            new_query[:60], target_entry.query[:60], notebook_id[:12],
+        )
 
     # ── Layer 1: Exact Match ─────────────────────────────────────────────
 
@@ -141,6 +204,9 @@ class ResponseCache:
                 if query_hash in self._lru_order:
                     self._lru_order.remove(query_hash)
                 self._lru_order.append(query_hash)
+                # Update global index
+                global_hash = self._compute_global_hash(query)
+                self._global_hash_index[global_hash] = existing
                 return
 
             # Create new entry
@@ -161,6 +227,10 @@ class ResponseCache:
 
             # Store in hash map
             self._cache_by_hash[query_hash] = entry
+
+            # Store in global hash index (query-only, for pre-routing lookup)
+            global_hash = self._compute_global_hash(query)
+            self._global_hash_index[global_hash] = entry
 
             # Store in notebook partition
             if notebook_id not in self._cache_by_notebook:
@@ -287,6 +357,7 @@ class ResponseCache:
             )
             self._last_hit_type = "semantic"
             self._stats["l2_hits"] += 1
+            self.create_alias(notebook_id, query, entry)
             return entry
 
         # Layer 3: LLM verification
@@ -306,6 +377,7 @@ class ResponseCache:
             )
             self._last_hit_type = "semantic"
             self._stats["l3_hits"] += 1
+            self.create_alias(notebook_id, query, matched)
             return matched
 
         logger.info("[CACHE] L3 MISS — LLM found no match for '%s'", query[:80])
@@ -324,6 +396,23 @@ class ResponseCache:
                 self._cache_by_hash.pop(entry.query_hash, None)
                 if entry.query_hash in self._lru_order:
                     self._lru_order.remove(entry.query_hash)
+                # Clean global index
+                global_hash = self._compute_global_hash(entry.query)
+                self._global_hash_index.pop(global_hash, None)
+
+            # Clean aliases pointing to entries in this notebook
+            for alias_hash in list(self._alias_hashes):
+                if alias_hash in self._cache_by_hash:
+                    entry = self._cache_by_hash[alias_hash]
+                    if entry.notebook_id == notebook_id:
+                        self._cache_by_hash.pop(alias_hash, None)
+                        self._alias_hashes.discard(alias_hash)
+            for gh in list(self._alias_global_hashes):
+                if gh in self._global_hash_index:
+                    entry = self._global_hash_index[gh]
+                    if entry.notebook_id == notebook_id:
+                        self._global_hash_index.pop(gh, None)
+                        self._alias_global_hashes.discard(gh)
 
             # Clean up matrices
             self._notebook_matrices.pop(notebook_id, None)
@@ -340,10 +429,13 @@ class ResponseCache:
         """Remove all cached entries."""
         with self._lock:
             self._cache_by_hash.clear()
+            self._global_hash_index.clear()
             self._cache_by_notebook.clear()
             self._lru_order.clear()
             self._notebook_matrices.clear()
             self._matrix_dirty.clear()
+            self._alias_hashes.clear()
+            self._alias_global_hashes.clear()
             for key in self._stats:
                 self._stats[key] = 0
 
@@ -619,6 +711,9 @@ class ResponseCache:
         oldest_hash = self._lru_order.pop(0)
         entry = self._cache_by_hash.pop(oldest_hash, None)
         if entry:
+            # Clean global index
+            global_hash = self._compute_global_hash(entry.query)
+            self._global_hash_index.pop(global_hash, None)
             nb_entries = self._cache_by_notebook.get(entry.notebook_id, [])
             if entry in nb_entries:
                 nb_entries.remove(entry)
@@ -632,6 +727,9 @@ class ResponseCache:
     def _remove_entry(self, entry: CachedResponse) -> None:
         """Remove a specific entry. Must hold self._lock."""
         self._cache_by_hash.pop(entry.query_hash, None)
+        # Clean global index
+        global_hash = self._compute_global_hash(entry.query)
+        self._global_hash_index.pop(global_hash, None)
         if entry.query_hash in self._lru_order:
             self._lru_order.remove(entry.query_hash)
 
@@ -658,10 +756,15 @@ class ResponseCache:
         return len(self._cache_by_notebook)
 
     def get_stats(self) -> dict:
-        """Return cache statistics including hit/miss counters."""
+        """Return cache statistics including hit/miss counters.
+
+        'entries' counts only primary entries (aliases excluded).
+        """
         with self._lock:
+            alias_count = len(self._alias_hashes)
             total_hits = (
-                self._stats["l1_hits"]
+                self._stats["pre_routing_l1_hits"]
+                + self._stats["l1_hits"]
                 + self._stats["l2_hits"]
                 + self._stats["l3_hits"]
             )
@@ -670,14 +773,17 @@ class ResponseCache:
                 (total_hits / total_lookups * 100) if total_lookups > 0 else 0.0
             )
             return {
+                "entries": len(self._cache_by_hash) - alias_count,
+                "aliases": alias_count,
                 "total_hits": total_hits,
                 "total_misses": self._stats["misses"],
                 "total_bypasses": self._stats["bypasses"],
                 "hit_rate": round(hit_rate, 1),
+                "pre_routing_l1_hits": self._stats["pre_routing_l1_hits"],
                 "l1_hits": self._stats["l1_hits"],
                 "l2_hits": self._stats["l2_hits"],
                 "l3_hits": self._stats["l3_hits"],
                 "l3_misses": self._stats["l3_misses"],
-                "entry_count": len(self._cache_by_hash),
+                "entry_count": len(self._cache_by_hash) - alias_count,
                 "notebook_count": len(self._cache_by_notebook),
             }

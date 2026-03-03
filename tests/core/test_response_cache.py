@@ -263,3 +263,146 @@ class TestResponseCacheLayer1:
         )
         result = cache.lookup(notebook_id="nb-1", query="key points?")
         assert result.thinking == "Let me analyze the document..."
+
+
+class TestGlobalLookup:
+    """Test pre-routing global L1 lookup (notebook-agnostic)."""
+
+    def _make_cache(self, **kwargs):
+        from nlm_proxy.core.response_cache import ResponseCache
+        defaults = dict(max_entries=100, ttl_seconds=3600, semantic_enabled=False)
+        defaults.update(kwargs)
+        return ResponseCache(**defaults)
+
+    def test_lookup_global_hit(self):
+        """Global lookup finds entry without knowing notebook_id."""
+        cache = self._make_cache()
+        cache.store(
+            notebook_id="nb1", query="test query", answer="answer",
+            thinking=None, conversation_id="conv1",
+        )
+        result = cache.lookup_global("test query")
+        assert result is not None
+        assert result.answer == "answer"
+        assert result.notebook_id == "nb1"
+
+    def test_lookup_global_miss(self):
+        """Global lookup returns None when query not cached."""
+        cache = self._make_cache()
+        result = cache.lookup_global("unknown query")
+        assert result is None
+
+    def test_lookup_global_case_insensitive(self):
+        """Global lookup normalizes case."""
+        cache = self._make_cache()
+        cache.store(
+            notebook_id="nb1", query="Hello World", answer="answer",
+            thinking=None, conversation_id="conv1",
+        )
+        result = cache.lookup_global("hello world")
+        assert result is not None
+
+    def test_lookup_global_after_eviction(self):
+        """Global index cleaned up on eviction."""
+        cache = self._make_cache(max_entries=2)
+        cache.store(notebook_id="nb1", query="q1", answer="a1", thinking=None, conversation_id="c1")
+        cache.store(notebook_id="nb1", query="q2", answer="a2", thinking=None, conversation_id="c2")
+        cache.store(notebook_id="nb1", query="q3", answer="a3", thinking=None, conversation_id="c3")
+        # q1 should be evicted
+        assert cache.lookup_global("q1") is None
+        assert cache.lookup_global("q3") is not None
+
+    def test_lookup_global_after_invalidation(self):
+        """Global index cleaned up on notebook invalidation."""
+        cache = self._make_cache()
+        cache.store(notebook_id="nb1", query="q1", answer="a1", thinking=None, conversation_id="c1")
+        cache.invalidate_notebook("nb1")
+        assert cache.lookup_global("q1") is None
+
+    def test_lookup_global_after_clear(self):
+        """Global index cleaned up on clear."""
+        cache = self._make_cache()
+        cache.store(notebook_id="nb1", query="q1", answer="a1", thinking=None, conversation_id="c1")
+        cache.clear()
+        assert cache.lookup_global("q1") is None
+
+
+class TestAliasCreation:
+    """Test alias creation on semantic match."""
+
+    def _make_cache(self, **kwargs):
+        from nlm_proxy.core.response_cache import ResponseCache
+        defaults = dict(max_entries=100, ttl_seconds=3600, semantic_enabled=False)
+        defaults.update(kwargs)
+        return ResponseCache(**defaults)
+
+    def test_create_alias_enables_l1_hit(self):
+        """After alias creation, new query gets L1 hit."""
+        cache = self._make_cache()
+        cache.store(
+            notebook_id="nb1", query="original query", answer="answer",
+            thinking=None, conversation_id="conv1",
+        )
+        original_entry = cache.lookup("nb1", "original query")
+
+        # Create alias
+        cache.create_alias("nb1", "rewritten query", original_entry)
+
+        # Alias should hit L1
+        result = cache.lookup("nb1", "rewritten query")
+        assert result is not None
+        assert result.answer == "answer"
+
+    def test_alias_in_global_index(self):
+        """Alias also available in global lookup."""
+        cache = self._make_cache()
+        cache.store(
+            notebook_id="nb1", query="original", answer="answer",
+            thinking=None, conversation_id="conv1",
+        )
+        entry = cache.lookup("nb1", "original")
+        cache.create_alias("nb1", "alias query", entry)
+        result = cache.lookup_global("alias query")
+        assert result is not None
+        assert result.answer == "answer"
+
+    def test_alias_not_counted_in_lru(self):
+        """Aliases don't consume LRU capacity."""
+        cache = self._make_cache()
+        cache.store(
+            notebook_id="nb1", query="primary", answer="answer",
+            thinking=None, conversation_id="conv1",
+        )
+        entry = cache.lookup("nb1", "primary")
+        # Create 5 aliases
+        for i in range(5):
+            cache.create_alias("nb1", f"alias {i}", entry)
+        stats = cache.get_stats()
+        # Only 1 primary entry, aliases don't count
+        assert stats["entries"] == 1
+        assert stats["aliases"] == 5
+
+    def test_alias_cleaned_on_invalidation(self):
+        """Aliases cleaned up when notebook invalidated."""
+        cache = self._make_cache()
+        cache.store(
+            notebook_id="nb1", query="primary", answer="answer",
+            thinking=None, conversation_id="conv1",
+        )
+        entry = cache.lookup("nb1", "primary")
+        cache.create_alias("nb1", "alias", entry)
+        cache.invalidate_notebook("nb1")
+        assert cache.lookup("nb1", "alias") is None
+        assert cache.lookup_global("alias") is None
+
+    def test_alias_cleaned_on_clear(self):
+        """Aliases cleaned up on full clear."""
+        cache = self._make_cache()
+        cache.store(
+            notebook_id="nb1", query="primary", answer="answer",
+            thinking=None, conversation_id="conv1",
+        )
+        entry = cache.lookup("nb1", "primary")
+        cache.create_alias("nb1", "alias", entry)
+        cache.clear()
+        assert cache.lookup("nb1", "alias") is None
