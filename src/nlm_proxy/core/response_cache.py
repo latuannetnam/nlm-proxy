@@ -159,6 +159,12 @@ class ResponseCache:
             if embedding is not None:
                 self._matrix_dirty[notebook_id] = True
 
+            logger.info(
+                "[CACHE] STORED '%s' (notebook=%s, answer_len=%d, total_entries=%d)",
+                query[:80], notebook_id[:12], len(answer),
+                len(self._cache_by_hash),
+            )
+
     def lookup(
         self,
         notebook_id: str,
@@ -170,6 +176,7 @@ class ResponseCache:
         Returns CachedResponse on hit, None on miss.
         """
         if bypass_cache:
+            logger.debug("[CACHE] L1 BYPASS for '%s'", query[:80])
             return None
 
         query_hash = self._compute_hash(notebook_id, query)
@@ -177,10 +184,19 @@ class ResponseCache:
         with self._lock:
             entry = self._cache_by_hash.get(query_hash)
             if entry is None:
+                logger.debug(
+                    "[CACHE] L1 MISS for '%s' (hash=%s, notebook=%s)",
+                    query[:80], query_hash[:12], notebook_id[:12],
+                )
                 return None
 
             # Check TTL
-            if time.time() - entry.cached_at > self._ttl_seconds:
+            age = time.time() - entry.cached_at
+            if age > self._ttl_seconds:
+                logger.info(
+                    "[CACHE] L1 EXPIRED for '%s' (age=%.0fs, ttl=%ds)",
+                    query[:80], age, self._ttl_seconds,
+                )
                 self._remove_entry(entry)
                 return None
 
@@ -190,6 +206,10 @@ class ResponseCache:
                 self._lru_order.remove(query_hash)
             self._lru_order.append(query_hash)
 
+            logger.info(
+                "[CACHE] L1 HIT for '%s' (hits=%d, age=%.0fs, answer_len=%d)",
+                query[:80], entry.hit_count, age, len(entry.answer),
+            )
             return entry
 
     async def lookup_async(
@@ -207,25 +227,29 @@ class ResponseCache:
         Returns CachedResponse on hit, None on miss.
         """
         if bypass_cache:
+            logger.debug("[CACHE] BYPASS (async) for '%s'", query[:80])
             return None
 
         # Layer 1: exact hash match
         result = self.lookup(notebook_id, query)
         if result is not None:
-            logger.info("[CACHE] HIT (exact) for '%s'", query[:80])
             return result
 
         # Layers 2-3 only if semantic matching is enabled
         if not self._semantic_enabled:
+            logger.debug("[CACHE] Semantic matching disabled, skipping L2/L3")
             return None
 
         # Layer 2: compute embedding and find similar
+        logger.debug("[CACHE] L2 computing embedding for '%s'", query[:80])
         query_emb = self._compute_embedding(query)
         if query_emb is None:
+            logger.debug("[CACHE] L2 embedding failed, skipping")
             return None
 
         candidates = self._find_similar(query_emb, notebook_id)
         if not candidates:
+            logger.debug("[CACHE] L2 MISS — no similar entries for '%s'", query[:80])
             return None
 
         # Check if early termination (similarity >= exact threshold)
@@ -234,22 +258,29 @@ class ResponseCache:
             with self._lock:
                 entry.hit_count += 1
             logger.info(
-                "[CACHE] HIT (semantic, sim=%.3f, skip-LLM) for '%s'",
-                candidates[0][0],
-                query[:80],
+                "[CACHE] L2 HIT (sim=%.4f, skip-LLM) for '%s' → '%s'",
+                candidates[0][0], query[:60], entry.query[:60],
             )
             return entry
 
         # Layer 3: LLM verification
+        logger.info(
+            "[CACHE] L3 verifying %d candidates for '%s'",
+            len(candidates), query[:80],
+        )
         matched = await self._verify_semantic_match(
             query, [c[1] for c in candidates]
         )
         if matched is not None:
             with self._lock:
                 matched.hit_count += 1
-            logger.info("[CACHE] HIT (semantic, LLM-verified) for '%s'", query[:80])
+            logger.info(
+                "[CACHE] L3 HIT (LLM-verified) for '%s' → '%s'",
+                query[:60], matched.query[:60],
+            )
             return matched
 
+        logger.info("[CACHE] L3 MISS — LLM found no match for '%s'", query[:80])
         return None
 
     # ── Invalidation ─────────────────────────────────────────────────────
@@ -306,8 +337,16 @@ class ResponseCache:
             self._notebook_matrices[notebook_id] = np.array(
                 embeddings, dtype=np.float32
             )
+            logger.debug(
+                "[CACHE] Rebuilt embedding matrix for notebook %s (shape=%s)",
+                notebook_id[:12], self._notebook_matrices[notebook_id].shape,
+            )
         else:
             self._notebook_matrices.pop(notebook_id, None)
+            logger.debug(
+                "[CACHE] Removed empty embedding matrix for notebook %s",
+                notebook_id[:12],
+            )
         self._matrix_dirty[notebook_id] = False
 
     def _find_similar(
@@ -333,6 +372,10 @@ class ResponseCache:
             # Filter to entries that have embeddings
             entries_with_emb = [e for e in entries if e.embedding is not None]
             if not entries_with_emb:
+                logger.debug(
+                    "[CACHE] L2 no entries with embeddings for notebook %s",
+                    notebook_id[:12],
+                )
                 return []
 
             # Rebuild matrix if dirty or missing
@@ -341,6 +384,10 @@ class ResponseCache:
 
             matrix = self._notebook_matrices.get(notebook_id)
             if matrix is None:
+                logger.debug(
+                    "[CACHE] L2 no embedding matrix found for notebook %s",
+                    notebook_id[:12],
+                )
                 return []
 
             # Ensure query embedding is a numpy array
@@ -355,20 +402,39 @@ class ResponseCache:
             max_sim = float(similarities.max())
             if max_sim >= self._similarity_exact_threshold:
                 best_idx = int(similarities.argmax())
+                logger.info(
+                    "[CACHE] L2 near-exact match (sim=%.4f, threshold=%.2f) "
+                    "for query_emb.shape=%s → '%s'",
+                    max_sim, self._similarity_exact_threshold,
+                    query_emb.shape, entries_with_emb[best_idx].query[:60],
+                )
                 return [(max_sim, entries_with_emb[best_idx])]
 
             # Filter by threshold and get top-K
             mask = similarities >= self._similarity_threshold
             if not mask.any():
+                logger.debug(
+                    "[CACHE] L2 no candidates above threshold=%.2f "
+                    "(max_sim=%.4f, %d entries checked)",
+                    self._similarity_threshold, max_sim, len(entries_with_emb),
+                )
                 return []
 
             filtered_idx = np.where(mask)[0]
             sorted_idx = filtered_idx[
                 np.argsort(similarities[filtered_idx])[::-1]
             ][:top_k]
-            return [
+            result = [
                 (float(similarities[i]), entries_with_emb[i]) for i in sorted_idx
             ]
+            logger.info(
+                "[CACHE] L2 found %d candidates (best=%.4f, threshold=%.2f, "
+                "%d entries checked): %s",
+                len(result), result[0][0], self._similarity_threshold,
+                len(entries_with_emb),
+                [(f"{sim:.3f}", e.query[:40]) for sim, e in result],
+            )
+            return result
 
     def _compute_embedding(self, query: str) -> object | None:
         """Compute query embedding using fastembed model.

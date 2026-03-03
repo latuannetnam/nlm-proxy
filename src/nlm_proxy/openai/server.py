@@ -562,7 +562,6 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     if is_first_turn and not request.bypass_cache and app.state.response_cache:
         cache_result = app.state.response_cache.lookup(request.model, query_text)
         if cache_result:
-            logger.info(f"[CACHE] HIT for '{query_text[:80]}', returning cached response")
             response = ChatCompletionResponse(
                 id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
                 created=int(time.time()),
