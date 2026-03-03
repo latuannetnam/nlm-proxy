@@ -370,8 +370,8 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
             logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
 
-            # Cache check after routing (first-turn, knowledge queries only)
-            if is_first_turn and not request.bypass_cache and app.state.response_cache and decision.request_type == RequestType.NOTEBOOKLM:
+            # Cache check after routing (knowledge queries only)
+            if not request.bypass_cache and app.state.response_cache and decision.request_type == RequestType.NOTEBOOKLM:
                 cache_result = await app.state.response_cache.lookup_async(decision.notebook_id, query)
                 if cache_result:
                     hit_type = app.state.response_cache._last_hit_type or "exact"
@@ -450,8 +450,8 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                 )
                 response_source = "llm"
             else:
-                # Cache check before NLM query (non-streaming, first-turn only)
-                if is_first_turn and not request.bypass_cache and app.state.response_cache:
+                # Cache check before NLM query (non-streaming)
+                if not request.bypass_cache and app.state.response_cache:
                     cache_result = await app.state.response_cache.lookup_async(decision.notebook_id, query)
                     if cache_result:
                         hit_type = app.state.response_cache._last_hit_type or "exact"
@@ -694,7 +694,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         if stored_conv_id:
             is_first_turn = False
 
-    if is_first_turn and not request.bypass_cache and app.state.response_cache:
+    if not request.bypass_cache and app.state.response_cache:
         cache_result = await app.state.response_cache.lookup_async(request.model, query_text)
         if cache_result:
             hit_type = app.state.response_cache._last_hit_type or "exact"
