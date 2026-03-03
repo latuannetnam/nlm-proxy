@@ -98,13 +98,18 @@ class TestRewriteVariants:
 
 
 class TestPerformance:
-    """Embedding performance benchmarks."""
+    """Embedding performance benchmarks.
+
+    Note: Design target is <50ms single query, but CI environments are slower.
+    We use relaxed thresholds here (200ms/100ms) to avoid flaky CI failures.
+    """
 
     def test_single_query_latency(self, model):
         text = "Chính sách nhân sự của công ty là gì?"
         start = time.perf_counter()
         list(model.embed([text]))
         elapsed_ms = (time.perf_counter() - start) * 1000
+        # Design target: <50ms. CI tolerance: <200ms.
         assert elapsed_ms < 200, f"Single query latency: {elapsed_ms:.1f}ms, expected <200ms"
 
     def test_batch_latency(self, model):
@@ -146,8 +151,15 @@ Add to existing `tests/core/test_response_cache.py`:
 class TestGlobalLookup:
     """Test pre-routing global L1 lookup (notebook-agnostic)."""
 
-    def test_lookup_global_hit(self, cache):
+    def _make_cache(self, **kwargs):
+        from nlm_proxy.core.response_cache import ResponseCache
+        defaults = dict(max_entries=100, ttl_seconds=3600, semantic_enabled=False)
+        defaults.update(kwargs)
+        return ResponseCache(**defaults)
+
+    def test_lookup_global_hit(self):
         """Global lookup finds entry without knowing notebook_id."""
+        cache = self._make_cache()
         cache.store(
             notebook_id="nb1", query="test query", answer="answer",
             thinking=None, conversation_id="conv1",
@@ -157,13 +169,15 @@ class TestGlobalLookup:
         assert result.answer == "answer"
         assert result.notebook_id == "nb1"
 
-    def test_lookup_global_miss(self, cache):
+    def test_lookup_global_miss(self):
         """Global lookup returns None when query not cached."""
+        cache = self._make_cache()
         result = cache.lookup_global("unknown query")
         assert result is None
 
-    def test_lookup_global_case_insensitive(self, cache):
+    def test_lookup_global_case_insensitive(self):
         """Global lookup normalizes case."""
+        cache = self._make_cache()
         cache.store(
             notebook_id="nb1", query="Hello World", answer="answer",
             thinking=None, conversation_id="conv1",
@@ -171,24 +185,26 @@ class TestGlobalLookup:
         result = cache.lookup_global("hello world")
         assert result is not None
 
-    def test_lookup_global_after_eviction(self, cache_small):
+    def test_lookup_global_after_eviction(self):
         """Global index cleaned up on eviction."""
-        # cache_small has max_entries=2
-        cache_small.store(notebook_id="nb1", query="q1", answer="a1", thinking=None, conversation_id="c1")
-        cache_small.store(notebook_id="nb1", query="q2", answer="a2", thinking=None, conversation_id="c2")
-        cache_small.store(notebook_id="nb1", query="q3", answer="a3", thinking=None, conversation_id="c3")
+        cache = self._make_cache(max_entries=2)
+        cache.store(notebook_id="nb1", query="q1", answer="a1", thinking=None, conversation_id="c1")
+        cache.store(notebook_id="nb1", query="q2", answer="a2", thinking=None, conversation_id="c2")
+        cache.store(notebook_id="nb1", query="q3", answer="a3", thinking=None, conversation_id="c3")
         # q1 should be evicted
-        assert cache_small.lookup_global("q1") is None
-        assert cache_small.lookup_global("q3") is not None
+        assert cache.lookup_global("q1") is None
+        assert cache.lookup_global("q3") is not None
 
-    def test_lookup_global_after_invalidation(self, cache):
+    def test_lookup_global_after_invalidation(self):
         """Global index cleaned up on notebook invalidation."""
+        cache = self._make_cache()
         cache.store(notebook_id="nb1", query="q1", answer="a1", thinking=None, conversation_id="c1")
         cache.invalidate_notebook("nb1")
         assert cache.lookup_global("q1") is None
 
-    def test_lookup_global_after_clear(self, cache):
+    def test_lookup_global_after_clear(self):
         """Global index cleaned up on clear."""
+        cache = self._make_cache()
         cache.store(notebook_id="nb1", query="q1", answer="a1", thinking=None, conversation_id="c1")
         cache.clear()
         assert cache.lookup_global("q1") is None
@@ -208,6 +224,9 @@ In `response_cache.py`, modify `__init__`, `store`, `_evict_oldest`, `_remove_en
 ```python
 # In __init__, add:
 self._global_hash_index: dict[str, CachedResponse] = {}
+
+# In _stats dict, add new counter (separate from post-routing l1_hits):
+self._stats["pre_routing_l1_hits"] = 0
 
 # Add new method:
 @staticmethod
@@ -238,8 +257,24 @@ def lookup_global(self, query: str) -> CachedResponse | None:
             query[:80], entry.notebook_id[:12], entry.hit_count, age,
         )
         self._last_hit_type = "exact"
-        self._stats["l1_hits"] += 1
+        # Use dedicated counter to avoid double-counting with post-routing l1_hits
+        self._stats["pre_routing_l1_hits"] += 1
         return entry
+
+# Add new method:
+def get_stats(self) -> dict:
+    """Return cache statistics.
+
+    'entries' counts only primary entries (aliases excluded).
+    """
+    with self._lock:
+        alias_count = len(getattr(self, '_alias_hashes', set()))
+        return {
+            "entries": len(self._cache_by_hash) - alias_count,
+            "aliases": alias_count,
+            "notebooks": len(self._cache_by_notebook),
+            **self._stats,
+        }
 
 # In store(), after self._cache_by_hash[query_hash] = entry, add:
 global_hash = self._compute_global_hash(query)
@@ -250,6 +285,10 @@ global_hash = self._compute_global_hash(query)
 self._global_hash_index[global_hash] = existing
 
 # In _remove_entry(), add cleanup:
+global_hash = self._compute_global_hash(entry.query)
+self._global_hash_index.pop(global_hash, None)
+
+# In _evict_oldest(), add cleanup (after popping from _cache_by_hash):
 global_hash = self._compute_global_hash(entry.query)
 self._global_hash_index.pop(global_hash, None)
 
@@ -289,8 +328,15 @@ git commit -m "feat(cache): add global hash index for pre-routing L1 lookup"
 class TestAliasCreation:
     """Test alias creation on semantic match."""
 
-    def test_create_alias_enables_l1_hit(self, cache):
+    def _make_cache(self, **kwargs):
+        from nlm_proxy.core.response_cache import ResponseCache
+        defaults = dict(max_entries=100, ttl_seconds=3600, semantic_enabled=False)
+        defaults.update(kwargs)
+        return ResponseCache(**defaults)
+
+    def test_create_alias_enables_l1_hit(self):
         """After alias creation, new query gets L1 hit."""
+        cache = self._make_cache()
         cache.store(
             notebook_id="nb1", query="original query", answer="answer",
             thinking=None, conversation_id="conv1",
@@ -305,8 +351,9 @@ class TestAliasCreation:
         assert result is not None
         assert result.answer == "answer"
 
-    def test_alias_in_global_index(self, cache):
+    def test_alias_in_global_index(self):
         """Alias also available in global lookup."""
+        cache = self._make_cache()
         cache.store(
             notebook_id="nb1", query="original", answer="answer",
             thinking=None, conversation_id="conv1",
@@ -317,8 +364,9 @@ class TestAliasCreation:
         assert result is not None
         assert result.answer == "answer"
 
-    def test_alias_not_counted_in_lru(self, cache):
+    def test_alias_not_counted_in_lru(self):
         """Aliases don't consume LRU capacity."""
+        cache = self._make_cache()
         cache.store(
             notebook_id="nb1", query="primary", answer="answer",
             thinking=None, conversation_id="conv1",
@@ -330,9 +378,11 @@ class TestAliasCreation:
         stats = cache.get_stats()
         # Only 1 primary entry, aliases don't count
         assert stats["entries"] == 1
+        assert stats["aliases"] == 5
 
-    def test_alias_cleaned_on_invalidation(self, cache):
+    def test_alias_cleaned_on_invalidation(self):
         """Aliases cleaned up when notebook invalidated."""
+        cache = self._make_cache()
         cache.store(
             notebook_id="nb1", query="primary", answer="answer",
             thinking=None, conversation_id="conv1",
@@ -343,8 +393,9 @@ class TestAliasCreation:
         assert cache.lookup("nb1", "alias") is None
         assert cache.lookup_global("alias") is None
 
-    def test_alias_cleaned_on_clear(self, cache):
+    def test_alias_cleaned_on_clear(self):
         """Aliases cleaned up on full clear."""
+        cache = self._make_cache()
         cache.store(
             notebook_id="nb1", query="primary", answer="answer",
             thinking=None, conversation_id="conv1",
@@ -390,15 +441,15 @@ def create_alias(
         new_query[:60], target_entry.query[:60], notebook_id[:12],
     )
 
-# Modify get_stats() — count only primary entries:
-# Change: "entries": len(self._cache_by_hash)
-# To:     "entries": len(self._cache_by_hash) - len(self._alias_hashes)
+# NOTE: get_stats() was already added in Task 2. It uses len(_alias_hashes)
+# to exclude aliases from the "entries" count. No further change needed here.
 
-# Modify _evict_oldest() — skip aliases in LRU:
-# When iterating _lru_order, skip hashes that are in _alias_hashes
+# NOTE: _evict_oldest() does NOT need modification because aliases are never
+# added to _lru_order (create_alias skips it). Eviction only pops from
+# _lru_order, so it naturally skips aliases.
 
 # Modify invalidate_notebook() — also clean aliases:
-# After removing entries, clean aliases pointing to those entries
+# After removing primary entries, clean aliases pointing to those entries
 for alias_hash in list(self._alias_hashes):
     if alias_hash in self._cache_by_hash:
         entry = self._cache_by_hash[alias_hash]
@@ -425,23 +476,25 @@ uv run pytest tests/core/test_response_cache.py::TestAliasCreation -v
 
 **Step 5: Wire alias creation into `lookup_async()`**
 
-In `lookup_async()`, after L2 HIT or L3 HIT, call `create_alias()`:
+In `lookup_async()`, add `create_alias()` calls at both semantic match return points:
 
 ```python
-# After L2 near-exact match (line ~289):
+# After L2 near-exact match (find the "L2 HIT (sim=...skip-LLM)" log line):
 self.create_alias(notebook_id, query, entry)
 return entry
 
-# After L3 LLM-verified match (line ~308):
+# After L3 LLM-verified match (find the "L3 HIT (LLM-verified)" log line):
 self.create_alias(notebook_id, query, matched)
 return matched
 ```
 
-**Step 6: Run all cache tests**
+**Step 6: Run all cache tests (including alias integration)**
 
 ```bash
 uv run pytest tests/core/test_response_cache.py -v
 ```
+
+> **Note:** The alias wiring in `lookup_async()` is only fully exercised via the integration test in Task 8 (manual verification with Open WebUI). The unit tests in `TestAliasCreation` verify alias mechanics in isolation. If desired, add an integration test using a mock LLM client to verify the full `lookup_async → create_alias` path.
 
 **Step 7: Commit**
 

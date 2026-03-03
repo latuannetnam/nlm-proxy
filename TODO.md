@@ -1,12 +1,10 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress
-- [Doing] **Performance**Response Cache: docs\plans\2026-03-02-response-cache-implementation.md
-- [] **Monitoring** Montior Response Cache metrics
-- [ ] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks: Memory management, Response caching, Cross-notebook query support
 - [] Refactor client.py: file too large
+- [ ] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks: Memory management, Response caching, Cross-notebook query support
+- [] Add support for Cloud-based embedding model (for example OpenAI, Gemini, Cohere, etc): local model work good enough for now
 - [ ] Enhance conversation management
-- [ ] Migrate Claude memory to Antigravity
 - [ ] **Scalability**: Loadbalancing request to multiple NotebookLM account (each Pro account has maximum 500 chat request/day): docs\plans\nlm-proxy-account-pool-specification.md
 - [ ] **Pre-processing**: Use LLM task to pre-process in individual notebook models
 - [ ] **Authentication**: Support multiple authentication profiles
@@ -26,3 +24,6 @@
 - [x] **Smart Router**: Basic LLM question routing implementation
 - [x] **MS Teams chatbot integration**: docs\plans\notebooklm-chatbot-design.md
 - [x] ** Notebook ACL**: Limit notebooks to query based on ACL (for example AD group): docs\plans\per-request-acl-specification.md
+- [x] **Performance**Response Cache: docs\plans\2026-03-02-response-cache-implementation.md
+- [x] **Monitoring** Montior Response Cache metrics: via API /v1/cache/stats and script scripts\cache-stats.ps1 + Cache Log Analyzer: scripts\cache-log-analyzer.py
+- [x] Migrate Claude memory to Antigravity
