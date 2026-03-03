@@ -380,9 +380,39 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                         )
                         await router.close()
                         await client.close()
+
+                        async def _stream_pre_routing_cached():
+                            chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+                            created = int(time.time())
+                            reasoning = "Pre-routing cache hit \u2014 returning cached response (skipped routing)."
+                            reasoning_chunk = ChatCompletionChunk(
+                                id=chunk_id, created=created, model=request.model,
+                                choices=[Choice(delta=DeltaContent(reasoning_content=reasoning + "\n\n"))],
+                            )
+                            yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
+                            if cache_result.thinking and request.include_thinking:
+                                thinking_chunk = ChatCompletionChunk(
+                                    id=chunk_id, created=created, model=request.model,
+                                    choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
+                                    system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                                )
+                                yield f"data: {thinking_chunk.model_dump_json()}\n\n"
+                            answer_chunk = ChatCompletionChunk(
+                                id=chunk_id, created=created, model=request.model,
+                                choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
+                                system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                            )
+                            yield f"data: {answer_chunk.model_dump_json()}\n\n"
+                            final_chunk = ChatCompletionChunk(
+                                id=chunk_id, created=created, model=request.model,
+                                choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
+                                system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+                            )
+                            yield f"data: {final_chunk.model_dump_json()}\n\n"
+                            yield "data: [DONE]\n\n"
+
                         return StreamingResponse(
-                            stream_cached_smart(cache_result, hit_type,
-                                                reasoning="Pre-routing cache hit \u2014 returning cached response (skipped routing)."),
+                            _stream_pre_routing_cached(),
                             media_type="text/event-stream",
                             headers={"X-Cache-Status": f"HIT_PRE_ROUTING_{hit_type.upper()}"},
                         )
