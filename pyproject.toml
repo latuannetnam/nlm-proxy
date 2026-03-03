@@ -49,6 +49,9 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
 ]
+all = [
+    "nlm-proxy[cache,dev]",
+]
 
 [project.scripts]
 nlm-proxy = "nlm_proxy.cli:main_cli"
