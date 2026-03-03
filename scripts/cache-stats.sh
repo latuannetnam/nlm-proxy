@@ -12,8 +12,11 @@ set -euo pipefail
 # ── Read .env file ──────────────────────────────────────────────────────
 
 load_env() {
+    # Search order: project root (relative to script), CWD, user home
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     local env_file=""
-    for f in .env "$HOME/.nlm-proxy/.env"; do
+    for f in "$script_dir/.env" .env "$HOME/.nlm-proxy/.env"; do
         [ -f "$f" ] && env_file="$f" && break
     done
     [ -z "$env_file" ] && return

@@ -18,7 +18,13 @@ param(
 # ── Read .env file ──────────────────────────────────────────────────────
 
 function Read-EnvFile {
-    $envPaths = @(".env", "$HOME/.nlm-proxy/.env")
+    # Search order: project root (relative to script), CWD, user home
+    $scriptDir = Split-Path -Parent $PSScriptRoot  # scripts/ -> project root
+    $envPaths = @(
+        (Join-Path $scriptDir ".env"),
+        ".env",
+        "$HOME/.nlm-proxy/.env"
+    )
     foreach ($path in $envPaths) {
         if (Test-Path $path) {
             Get-Content $path | ForEach-Object {
