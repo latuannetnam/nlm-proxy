@@ -366,9 +366,13 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
             query = user_messages[-1].content
 
-            # Cache check before routing (first-turn only)
-            if is_first_turn and not request.bypass_cache and app.state.response_cache:
-                cache_result = await app.state.response_cache.lookup_async(request.model, query)
+            decision = await router.route(query, allowed_notebooks=request_allowed_notebooks)
+
+            logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
+
+            # Cache check after routing (first-turn, knowledge queries only)
+            if is_first_turn and not request.bypass_cache and app.state.response_cache and decision.request_type == RequestType.KNOWLEDGE_QUERY:
+                cache_result = await app.state.response_cache.lookup_async(decision.notebook_id, query)
                 if cache_result:
                     hit_type = app.state.response_cache._last_hit_type or "exact"
                     async def stream_cached_smart(cache_result, hit_type, reasoning="Cache hit — returning cached response."):
@@ -411,10 +415,6 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                         headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
                     )
 
-            decision = await router.route(query, allowed_notebooks=request_allowed_notebooks)
-
-            logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
-
             # Streaming: generator creates its own span to capture response
             return StreamingResponse(
                 stream_smart_response(client, router, decision, query, request, chat_id, tracing_settings, is_first_turn),
@@ -452,7 +452,7 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
             else:
                 # Cache check before NLM query (non-streaming, first-turn only)
                 if is_first_turn and not request.bypass_cache and app.state.response_cache:
-                    cache_result = await app.state.response_cache.lookup_async(request.model, query)
+                    cache_result = await app.state.response_cache.lookup_async(decision.notebook_id, query)
                     if cache_result:
                         hit_type = app.state.response_cache._last_hit_type or "exact"
                         from fastapi.responses import JSONResponse
