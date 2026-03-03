@@ -872,6 +872,52 @@ async def session_stats():
     return app.state.session_store.get_stats()
 
 
+# ── Response Cache Management ────────────────────────────────────────────
+
+
+@app.get("/v1/cache/stats", dependencies=[Depends(verify_api_key)])
+async def cache_stats():
+    """Get response cache statistics."""
+    if not app.state.response_cache:
+        return {
+            "enabled": False,
+            "entry_count": 0,
+            "notebook_count": 0,
+        }
+
+    cache = app.state.response_cache
+    return {
+        "enabled": True,
+        "entry_count": cache.entry_count,
+        "notebook_count": cache.notebook_count,
+        "max_entries": cache._max_entries,
+        "ttl_seconds": cache._ttl_seconds,
+        "semantic_enabled": cache._semantic_enabled,
+    }
+
+
+@app.delete("/v1/cache", dependencies=[Depends(verify_api_key)])
+async def clear_cache():
+    """Clear all response cache entries."""
+    if not app.state.response_cache:
+        raise HTTPException(status_code=503, detail="Response cache not initialized")
+
+    count = app.state.response_cache.entry_count
+    app.state.response_cache.clear()
+    logger.info(f"[CACHE] Cleared all {count} entries via API")
+    return {"status": "cleared", "entries_removed": count}
+
+
+@app.delete("/v1/cache/{notebook_id}", dependencies=[Depends(verify_api_key)])
+async def clear_cache_notebook(notebook_id: str):
+    """Clear response cache entries for a specific notebook."""
+    if not app.state.response_cache:
+        raise HTTPException(status_code=503, detail="Response cache not initialized")
+
+    app.state.response_cache.invalidate_notebook(notebook_id)
+    logger.info(f"[CACHE] Cleared cache for notebook {notebook_id} via API")
+    return {"status": "cleared", "notebook_id": notebook_id}
+
 def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     """Run the OpenAI-compatible proxy server."""
     # Initialize OpenTelemetry tracing
