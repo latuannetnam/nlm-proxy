@@ -40,17 +40,19 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
     "opentelemetry-instrumentation-fastapi>=0.41b0",
     "opentelemetry-instrumentation-httpx>=0.41b0",
+    # Response cache (embedding + similarity)
+    "fastembed>=0.4",
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
-cache = ["fastembed>=0.4", "numpy>=1.24"]
 cache-gpu = ["fastembed-gpu>=0.4", "numpy>=1.24"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
 ]
 all = [
-    "nlm-proxy[cache,dev]",
+    "nlm-proxy[dev]",
 ]
 
 [project.scripts]

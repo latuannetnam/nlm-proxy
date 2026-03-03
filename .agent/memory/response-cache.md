@@ -29,13 +29,12 @@ NLM_PROXY_CACHE_SEMANTIC_MATCH_TOP_K=10
 
 ## Installation
 
-```bash
-uv pip install -e ".[cache]"       # CPU embeddings
-uv pip install -e ".[cache-gpu]"   # GPU embeddings
-uv pip install -e ".[all]"         # Everything (cache + dev)
-```
+`fastembed` and `numpy` are core dependencies — semantic matching (L2/L3) is always available.
 
-If `fastembed` is not installed, semantic matching (L2/L3) is automatically disabled. L1 exact match always works.
+```bash
+uv pip install -e "."              # Core install (includes fastembed + numpy)
+uv pip install -e ".[cache-gpu]"   # GPU-accelerated embeddings
+```
 
 ## Management API
 

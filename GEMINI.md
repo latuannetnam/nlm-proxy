@@ -18,8 +18,7 @@
 
 ```bash
 # === Installation ===
-uv pip install -e ".[all]"              # Install with all extras
-uv pip install -e ".[cache]"            # Install with response cache (fastembed)
+uv pip install -e ".[all]"              # Install with all extras (incl. dev)
 uv cache clean && uv tool install ".[all]" --force  # Reinstall after changes
 
 # === MCP Server ===

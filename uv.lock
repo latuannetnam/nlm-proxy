@@ -1185,8 +1185,10 @@ version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "fastembed" },
     { name = "fastmcp" },
     { name = "httpx" },
+    { name = "numpy" },
     { name = "openai" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-grpc" },
@@ -1201,9 +1203,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-cache = [
-    { name = "fastembed" },
-    { name = "numpy" },
+all = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
 ]
 cache-gpu = [
     { name = "fastembed-gpu" },
@@ -1217,11 +1219,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.100.0" },
-    { name = "fastembed", marker = "extra == 'cache'", specifier = ">=0.4" },
+    { name = "fastembed", specifier = ">=0.4" },
     { name = "fastembed-gpu", marker = "extra == 'cache-gpu'", specifier = ">=0.4" },
     { name = "fastmcp", specifier = ">=0.1.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "numpy", marker = "extra == 'cache'", specifier = ">=1.24" },
+    { name = "nlm-proxy", extras = ["dev"], marker = "extra == 'all'" },
+    { name = "numpy", specifier = ">=1.24" },
     { name = "numpy", marker = "extra == 'cache-gpu'", specifier = ">=1.24" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
@@ -1237,7 +1240,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.23.0" },
     { name = "websocket-client", specifier = ">=1.6.0" },
 ]
-provides-extras = ["cache", "cache-gpu", "dev"]
+provides-extras = ["cache-gpu", "dev", "all"]
 
 [[package]]
 name = "numpy"
