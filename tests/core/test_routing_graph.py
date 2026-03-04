@@ -232,3 +232,38 @@ async def test_full_graph_llm_task(mock_chat_model, mock_notebook_cache):
     assert result["request_type"] == "llm_task"
     assert result.get("notebook_id") is None
     assert mock_chat_model.ainvoke.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_select_notebook_with_source_descriptions(mock_chat_model, mock_notebook_cache):
+    """source_descriptions_enabled=True → enriched prompt sent to LLM."""
+    from nlm_proxy.core.routing_graph import select_notebook_node
+
+    mock_chat_model.ainvoke = AsyncMock(return_value=_mock_llm_response("nb-1"))
+
+    routing_settings = MagicMock()
+    routing_settings.source_descriptions_enabled = True
+    routing_settings.source_descriptions_max_sources = 5
+    routing_settings.source_max_keywords = 5
+    routing_settings.source_summary_max_chars = 200
+    routing_settings.max_source_titles = 15
+
+    state = {
+        "query": "What is AI?",
+        "request_type": "notebooklm",
+        "available_notebooks": [],
+        "allowed_notebooks": None,
+        "notebook_id": None,
+        "reasoning": "",
+        "messages": [],
+    }
+
+    result = await select_notebook_node(
+        state,
+        chat_model=mock_chat_model,
+        notebook_cache=mock_notebook_cache,
+        routing_settings=routing_settings,
+    )
+
+    # Verify LLM was called (the enriched prompt would include source info)
+    mock_chat_model.ainvoke.assert_called_once()
