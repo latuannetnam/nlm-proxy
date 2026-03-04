@@ -152,3 +152,31 @@ class AgentCore:
             if cache_result:
                 return cache_result, hit_type
         return None, None
+
+    # -- Session management helpers --
+
+    def get_conversation_id(self, chat_id: str) -> str | None:
+        """Get stored conversation_id for a chat session.
+
+        Returns None if no session_store configured or no session found.
+        """
+        if not chat_id or not self.session_store:
+            return None
+        return self.session_store.get(chat_id)
+
+    def save_conversation_id(self, chat_id: str, conversation_id: str) -> None:
+        """Save conversation_id for a chat session.
+
+        No-op if session_store not configured or chat_id/conv_id empty.
+        """
+        if chat_id and conversation_id and self.session_store:
+            self.session_store.set(chat_id, conversation_id)
+            logger.info(
+                "session_saved: chat_id=%s, conversation_id=%s",
+                chat_id, conversation_id,
+            )
+        elif chat_id and not conversation_id:
+            logger.info(
+                "session_not_saved: chat_id=%s, reason=no_conversation_id_from_nlm",
+                chat_id,
+            )

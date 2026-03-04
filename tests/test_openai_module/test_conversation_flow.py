@@ -44,6 +44,9 @@ def _make_mock_agent_core(query_stream_chunks=None):
     mock_agent = MagicMock(spec=AgentCore)
     mock_agent.response_cache = None
     mock_agent.chat_model = AsyncMock()
+    # Session helpers: default to no stored session
+    mock_agent.get_conversation_id = MagicMock(return_value=None)
+    mock_agent.save_conversation_id = MagicMock()
 
     if query_stream_chunks is not None:
         async def mock_query_stream(*args, **kwargs):
@@ -176,6 +179,8 @@ async def test_smart_routing_non_streaming_emits_system_fingerprint():
         "conversation_id": "conv-stored-123",
     })
     mock_agent.chat_model = AsyncMock()
+    mock_agent.get_conversation_id = MagicMock(return_value="conv-stored-123")
+    mock_agent.save_conversation_id = MagicMock()
     app.state.agent_core = mock_agent
 
     request = ChatCompletionRequest(
@@ -236,10 +241,10 @@ async def test_session_saved_logged_on_stream(caplog):
         ):
             pass
 
-    # Check for structured log events
+    # Verify session save was called via AgentCore
+    mock_agent.save_conversation_id.assert_called_with("log-chat-id", "conv-log-test")
+    # Check for conversation_id_from_nlm log
     log_messages = [r.message for r in caplog.records]
-    assert any("session_saved" in msg and "log-chat-id" in msg for msg in log_messages), \
-        f"Expected 'session_saved' log with 'log-chat-id', got: {log_messages}"
     assert any("conversation_id_from_nlm" in msg and "conv-log-test" in msg for msg in log_messages), \
         f"Expected 'conversation_id_from_nlm' log, got: {log_messages}"
 

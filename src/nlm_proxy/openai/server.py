@@ -278,9 +278,7 @@ async def stream_smart_response(agent_core: AgentCore, decision: RoutingDecision
                 if new_conv_id and not conversation_id:
                     conversation_id = new_conv_id
                     logger.info("conversation_id_from_nlm: conversation_id=%s, notebook_id=%s", conversation_id, decision.notebook_id)
-                    if chat_id and app.state.session_store:
-                        app.state.session_store.set(chat_id, conversation_id)
-                        logger.info("session_saved: chat_id=%s, conversation_id=%s", chat_id, conversation_id)
+                    agent_core.save_conversation_id(chat_id, conversation_id)
 
                 # Filter thinking unless requested
                 if chunk_type == "thinking" and not request.include_thinking:
@@ -378,11 +376,7 @@ async def _handle_non_streaming(agent_core: AgentCore, decision: RoutingDecision
 
             # Save conversation_id to session store
             conv_id = result.get("conversation_id", "") if result else ""
-            if chat_id and conv_id and app.state.session_store:
-                app.state.session_store.set(chat_id, conv_id)
-                logger.info("session_saved: chat_id=%s, conversation_id=%s", chat_id, conv_id)
-            elif chat_id and not conv_id:
-                logger.info("session_not_saved: chat_id=%s, reason=no_conversation_id_from_nlm", chat_id)
+            agent_core.save_conversation_id(chat_id, conv_id)
 
             # Store in response cache
             if agent_core.response_cache and response_text and conv_id:
@@ -465,16 +459,15 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
     else:
         logger.debug("[SMART-ROUTER] No metadata - all notebooks allowed")
 
-    # Load conversation_id from session store
+    # Load conversation_id from session store (via agent_core or fallback)
     conversation_id = None
-    if chat_id and app.state.session_store:
-        stored_conv_id = app.state.session_store.get(chat_id)
-        if stored_conv_id:
-            logger.info("session_lookup: chat_id=%s, conversation_id=%s, source=%s", chat_id, stored_conv_id, chat_id_source)
-            request.conversation_id = stored_conv_id
-            conversation_id = stored_conv_id
-        else:
-            logger.info("session_lookup: chat_id=%s, conversation_id=None, source=%s", chat_id, chat_id_source)
+    stored_conv_id = agent_core.get_conversation_id(chat_id) if agent_core else None
+    if stored_conv_id:
+        logger.info("session_lookup: chat_id=%s, conversation_id=%s, source=%s", chat_id, stored_conv_id, chat_id_source)
+        request.conversation_id = stored_conv_id
+        conversation_id = stored_conv_id
+    elif chat_id:
+        logger.info("session_lookup: chat_id=%s, conversation_id=None, source=%s", chat_id, chat_id_source)
 
     user_messages = [m for m in request.messages if m.role == "user"]
     if not user_messages:
@@ -569,9 +562,8 @@ async def stream_response(client, notebook_id: str, query_text: str, request: Ch
                 conversation_id = new_conv_id
                 logger.info(f"conversation_id_from_nlm: conversation_id={conversation_id}, notebook_id={notebook_id}")
                 # Save to session store if we have a chat_id
-                if chat_id and app.state.session_store:
-                    app.state.session_store.set(chat_id, conversation_id)
-                    logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conversation_id}")
+                if chat_id and app.state.agent_core:
+                    app.state.agent_core.save_conversation_id(chat_id, conversation_id)
 
             # Compute delta: NotebookLM sends cumulative text, we need only the new part
             if chunk_type == "thinking":
@@ -663,8 +655,15 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         f"has_metadata={request.metadata is not None}"
     )
 
-    # Load existing conversation_id from session store if chat_id exists
-    if chat_id and app.state.session_store:
+    # Load existing conversation_id from session store
+    if chat_id and agent_core:
+        stored_conv_id = agent_core.get_conversation_id(chat_id)
+        if stored_conv_id:
+            logger.info(f"session_lookup: chat_id={chat_id}, conversation_id={stored_conv_id}, source={chat_id_source}")
+            request.conversation_id = stored_conv_id
+        else:
+            logger.info(f"session_lookup: chat_id={chat_id}, conversation_id=None, source={chat_id_source}")
+    elif chat_id and app.state.session_store:
         stored_conv_id = app.state.session_store.get(chat_id)
         if stored_conv_id:
             logger.info(f"session_lookup: chat_id={chat_id}, conversation_id={stored_conv_id}, source={chat_id_source}")
@@ -684,7 +683,11 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
 
     # First-turn detection
     is_first_turn = request.conversation_id is None
-    if chat_id and app.state.session_store:
+    if chat_id and agent_core:
+        stored_conv_id = agent_core.get_conversation_id(chat_id)
+        if stored_conv_id:
+            is_first_turn = False
+    elif chat_id and app.state.session_store:
         stored_conv_id = app.state.session_store.get(chat_id)
         if stored_conv_id:
             is_first_turn = False
@@ -793,10 +796,11 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     answer = result.get("answer", "") if result else ""
     conv_id = result.get("conversation_id", "") if result else ""
 
-    # Save conversation_id to session store if we have a chat_id
-    if chat_id and conv_id and app.state.session_store:
+    # Save conversation_id to session store
+    if agent_core:
+        agent_core.save_conversation_id(chat_id, conv_id)
+    elif chat_id and conv_id and app.state.session_store:
         app.state.session_store.set(chat_id, conv_id)
-        logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conv_id}")
     elif chat_id and not conv_id:
         logger.info(f"session_not_saved: chat_id={chat_id}, reason=no_conversation_id_from_nlm")
 

@@ -304,6 +304,19 @@ graph.add_edge("resolve_cross_notebook", END)
 **Effort**: 🟡 Medium — integrate checkpointer with existing FastAPI lifecycle, ~1-2 days
 **Files changed**: `openai/session.py` (replace or wrap), `openai/server.py`
 
+> [!NOTE]
+> #### Implementation Note (2026-03-04)
+>
+> LangGraph checkpointing was **deferred** in favor of an intermediate step:
+> - Moved `SessionStore` from `openai/session.py` → `core/session.py` (shared component)
+> - Added `AgentCore.get_conversation_id()` / `save_conversation_id()` helpers
+> - `server.py` now routes session ops through `AgentCore` instead of `app.state.session_store` directly
+>
+> **Rationale**: The routing graph is stateless (classify → select) — it doesn't need
+> conversation memory. `conversation_id` is a transport concern (NLM API opaque token).
+> LangGraph checkpointing will be integrated when the tool-calling agent (§6) adds
+> multi-turn state, or when persistence across restarts becomes a requirement.
+
 ---
 
 ### 6. Tool-Calling Agent — NotebookLM as LangGraph Tools
