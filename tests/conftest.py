@@ -5,19 +5,15 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_openai_app_state():
-    """Reset the OpenAI server app.state between tests.
-
-    Because the FastAPI `app` is a module-level singleton, state set by one
-    test can leak into subsequent tests. This fixture ensures clean state.
-    """
+    """Reset the OpenAI server app.state between tests."""
     from nlm_proxy.openai.server import app
 
-    # Save original state
     original_agent_core = getattr(app.state, "agent_core", None)
     original_response_cache = getattr(app.state, "response_cache", None)
+    original_session_store = getattr(app.state, "session_store", None)
 
     yield
 
-    # Restore to None (clean state) after each test
     app.state.agent_core = original_agent_core
     app.state.response_cache = original_response_cache
+    app.state.session_store = original_session_store

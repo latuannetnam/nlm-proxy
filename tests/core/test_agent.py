@@ -215,3 +215,179 @@ async def test_agent_handle_direct_query_cache_miss(mock_components):
 
     assert result is None
     assert hit_type is None
+
+
+# ── Session helper tests ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_id_returns_stored():
+    """session_store.get() returns stored conversation_id."""
+    from nlm_proxy.core.agent import AgentCore
+
+    mock_session = MagicMock()
+    mock_session.get.return_value = "conv-123"
+
+    with patch("nlm_proxy.core.agent.build_routing_graph"):
+        agent = AgentCore(
+            nlm_client=AsyncMock(), notebook_cache=MagicMock(),
+            response_cache=MagicMock(), chat_model=AsyncMock(),
+            session_store=mock_session,
+        )
+    assert agent.get_conversation_id("chat-1") == "conv-123"
+    mock_session.get.assert_called_once_with("chat-1")
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_id_no_session_store():
+    """session_store=None → returns None."""
+    from nlm_proxy.core.agent import AgentCore
+
+    with patch("nlm_proxy.core.agent.build_routing_graph"):
+        agent = AgentCore(
+            nlm_client=AsyncMock(), notebook_cache=MagicMock(),
+            response_cache=MagicMock(), chat_model=AsyncMock(),
+            session_store=None,
+        )
+    assert agent.get_conversation_id("chat-1") is None
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_id_empty_chat_id():
+    """chat_id='' → returns None."""
+    from nlm_proxy.core.agent import AgentCore
+
+    with patch("nlm_proxy.core.agent.build_routing_graph"):
+        agent = AgentCore(
+            nlm_client=AsyncMock(), notebook_cache=MagicMock(),
+            response_cache=MagicMock(), chat_model=AsyncMock(),
+            session_store=MagicMock(),
+        )
+    assert agent.get_conversation_id("") is None
+
+
+@pytest.mark.asyncio
+async def test_save_conversation_id_calls_session_store():
+    """session_store.set() called with correct args."""
+    from nlm_proxy.core.agent import AgentCore
+
+    mock_session = MagicMock()
+
+    with patch("nlm_proxy.core.agent.build_routing_graph"):
+        agent = AgentCore(
+            nlm_client=AsyncMock(), notebook_cache=MagicMock(),
+            response_cache=MagicMock(), chat_model=AsyncMock(),
+            session_store=mock_session,
+        )
+    agent.save_conversation_id("chat-1", "conv-123")
+    mock_session.set.assert_called_once_with("chat-1", "conv-123")
+
+
+@pytest.mark.asyncio
+async def test_save_conversation_id_noop_when_no_store():
+    """session_store=None → no error."""
+    from nlm_proxy.core.agent import AgentCore
+
+    with patch("nlm_proxy.core.agent.build_routing_graph"):
+        agent = AgentCore(
+            nlm_client=AsyncMock(), notebook_cache=MagicMock(),
+            response_cache=MagicMock(), chat_model=AsyncMock(),
+            session_store=None,
+        )
+    # Should not raise
+    agent.save_conversation_id("chat-1", "conv-123")
+
+
+@pytest.mark.asyncio
+async def test_save_conversation_id_noop_when_empty_conv_id():
+    """conversation_id='' → not saved."""
+    from nlm_proxy.core.agent import AgentCore
+
+    mock_session = MagicMock()
+
+    with patch("nlm_proxy.core.agent.build_routing_graph"):
+        agent = AgentCore(
+            nlm_client=AsyncMock(), notebook_cache=MagicMock(),
+            response_cache=MagicMock(), chat_model=AsyncMock(),
+            session_store=mock_session,
+        )
+    agent.save_conversation_id("chat-1", "")
+    mock_session.set.assert_not_called()
+
+
+# ── Edge case tests ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_route_no_response_cache():
+    """response_cache=None → skip cache, go straight to graph."""
+    from nlm_proxy.core.agent import AgentCore, RequestOptions
+
+    with patch("nlm_proxy.core.agent.build_routing_graph") as mock_build:
+        mock_graph = AsyncMock()
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "request_type": "notebooklm",
+            "notebook_id": "nb-1",
+            "reasoning": "Selected",
+        })
+        mock_build.return_value = mock_graph
+
+        agent = AgentCore(
+            nlm_client=AsyncMock(), notebook_cache=MagicMock(),
+            response_cache=None, chat_model=AsyncMock(),
+        )
+        decision = await agent.route("test", RequestOptions())
+
+    assert decision.request_type == "notebooklm"
+    assert decision.cache_result is None
+
+
+@pytest.mark.asyncio
+async def test_route_fallback_empty_notebooks_reraises():
+    """Graph error + no notebooks → exception propagated."""
+    from nlm_proxy.core.agent import AgentCore, RequestOptions
+
+    with patch("nlm_proxy.core.agent.build_routing_graph") as mock_build:
+        mock_graph = AsyncMock()
+        mock_graph.ainvoke = AsyncMock(side_effect=RuntimeError("LLM error"))
+        mock_build.return_value = mock_graph
+
+        mock_nb_cache = MagicMock()
+        mock_nb_cache.get_all.return_value = []  # No notebooks
+
+        agent = AgentCore(
+            nlm_client=AsyncMock(), notebook_cache=mock_nb_cache,
+            response_cache=MagicMock(), chat_model=AsyncMock(),
+        )
+        agent.response_cache.lookup_global.return_value = (None, None)
+
+        with pytest.raises(RuntimeError, match="LLM error"):
+            await agent.route("test", RequestOptions())
+
+
+@pytest.mark.asyncio
+async def test_route_fallback_with_acl_filters_notebooks():
+    """Graph error + ACL filter → fallback uses only allowed notebooks."""
+    from nlm_proxy.core.agent import AgentCore, RequestOptions
+
+    with patch("nlm_proxy.core.agent.build_routing_graph") as mock_build:
+        mock_graph = AsyncMock()
+        mock_graph.ainvoke = AsyncMock(side_effect=RuntimeError("timeout"))
+        mock_build.return_value = mock_graph
+
+        nb1 = MagicMock(id="nb-1")
+        nb2 = MagicMock(id="nb-2")
+        mock_nb_cache = MagicMock()
+        mock_nb_cache.get_all.return_value = [nb1, nb2]
+
+        agent = AgentCore(
+            nlm_client=AsyncMock(), notebook_cache=mock_nb_cache,
+            response_cache=MagicMock(), chat_model=AsyncMock(),
+        )
+        agent.response_cache.lookup_global.return_value = (None, None)
+
+        options = RequestOptions(allowed_notebooks=["nb-2"])
+        decision = await agent.route("test", options)
+
+    assert decision.notebook_id == "nb-2"
+    assert "fallback" in decision.reasoning.lower()
