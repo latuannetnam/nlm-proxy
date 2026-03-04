@@ -46,6 +46,10 @@ _client: NotebookLMClient | None = None
 _client_lock: asyncio.Lock | None = None
 _query_timeout: float = float(os.environ.get("NOTEBOOKLM_QUERY_TIMEOUT", "120.0"))
 
+# AgentCore singleton for query tools (Task 7.1)
+from nlm_proxy.core.agent import AgentCore, RequestOptions
+_agent_core: AgentCore | None = None
+
 
 def _get_lock() -> asyncio.Lock:
     """Get or create the async lock for client initialization."""
@@ -138,6 +142,70 @@ async def get_client() -> NotebookLMClient:
             # Initialize client (triggers async auth token refresh if needed)
             await _client._ensure_initialized()
     return _client
+
+
+async def get_agent_core() -> AgentCore:
+    """Get or create the shared AgentCore singleton for MCP query tools."""
+    global _agent_core
+    if _agent_core is None:
+        client = await get_client()
+
+        from nlm_proxy.core.config import get_routing_settings, get_cache_settings, get_agent_settings
+        from nlm_proxy.core.llm_client import LangChainLLMClient, create_chat_model
+
+        routing_settings = get_routing_settings()
+        agent_settings = get_agent_settings()
+
+        # Only create full agent if LLM is configured
+        if routing_settings.llm_api_key:
+            chat_model = create_chat_model(
+                model=routing_settings.llm_model,
+                provider=agent_settings.llm_provider,
+                base_url=routing_settings.llm_base_url,
+                api_key=routing_settings.llm_api_key,
+            )
+
+            # Response cache (optional)
+            cache_settings = get_cache_settings()
+            response_cache = None
+            if cache_settings.response_cache_enabled:
+                from nlm_proxy.core.response_cache import ResponseCache
+                llm_client = LangChainLLMClient(chat_model=chat_model)
+                response_cache = ResponseCache(
+                    max_entries=cache_settings.response_cache_max_entries,
+                    ttl_seconds=cache_settings.response_cache_ttl,
+                    semantic_enabled=cache_settings.semantic_match_enabled,
+                    llm_client=llm_client,
+                    embedding_model=cache_settings.embedding_model,
+                    similarity_threshold=cache_settings.similarity_threshold,
+                )
+
+            # NotebookCache (optional)
+            from nlm_proxy.core.notebook_cache import NotebookCache
+            notebook_cache = NotebookCache(
+                nlm_client=client,
+                ttl_seconds=routing_settings.summary_cache_ttl,
+                allowed_notebooks=routing_settings.allowed_notebooks,
+                on_sources_changed=response_cache.invalidate_notebook if response_cache else None,
+            )
+
+            _agent_core = AgentCore(
+                nlm_client=client,
+                notebook_cache=notebook_cache,
+                response_cache=response_cache,
+                chat_model=chat_model,
+                routing_settings=routing_settings,
+            )
+        else:
+            # No LLM configured — AgentCore without routing
+            _agent_core = AgentCore(
+                nlm_client=client,
+                notebook_cache=None,
+                response_cache=None,
+                chat_model=None,
+            )
+
+    return _agent_core
 
 
 @logged_tool()
@@ -488,12 +556,11 @@ async def notebook_query(
         # Use provided timeout or fall back to global default
         effective_timeout = timeout if timeout is not None else _query_timeout
 
-        client = await get_client()
-        result = await client.query(
-            notebook_id,
-            query_text=query,
-            source_ids=source_ids,
+        agent = await get_agent_core()
+        result = await agent.query(
+            notebook_id, query,
             conversation_id=conversation_id,
+            source_ids=source_ids,
             timeout=effective_timeout,
         )
 
@@ -537,7 +604,7 @@ async def notebook_query_stream(
             except json_module.JSONDecodeError:
                 source_ids = [source_ids]
 
-        client = await get_client()
+        agent = await get_agent_core()
 
         thinking_steps: list[str] = []
         answer_chunks: list[str] = []
@@ -546,9 +613,8 @@ async def notebook_query_stream(
 
         mcp_logger.debug(f"Starting streaming query for notebook {notebook_id}")
 
-        async for chunk in client.query_stream(
-            notebook_id,
-            query_text=query,
+        async for chunk in agent.query_stream(
+            notebook_id, query,
             source_ids=source_ids,
             conversation_id=conversation_id,
         ):
@@ -560,20 +626,16 @@ async def notebook_query_stream(
                 mcp_logger.debug(f"Streaming chunk #{chunk_count} (thinking): {chunk['text'][:80]}...")
                 # Report thinking progress to MCP client
                 if ctx:
-                    # Truncate thinking text for progress message
                     preview = chunk["text"][:100] + "..." if len(chunk["text"]) > 100 else chunk["text"]
                     await ctx.report_progress(
                         progress=chunk_count,
-                        total=chunk_count + 5,  # Estimated total
+                        total=chunk_count + 5,
                         message=f"Thinking: {preview}",
                     )
             else:
                 answer_chunks.append(chunk["text"])
                 mcp_logger.debug(f"Streaming chunk #{chunk_count} (answer): {len(chunk['text'])} chars")
-                # Report answer progress with actual answer text
                 if ctx:
-                    # Send answer chunk with prefix so client can identify it
-                    # Format: "Answer:<chunk_text>" - client should strip prefix and append text
                     await ctx.report_progress(
                         progress=chunk_count,
                         total=chunk_count + 1,
