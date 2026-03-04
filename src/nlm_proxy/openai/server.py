@@ -17,6 +17,9 @@ from nlm_proxy.core.logging import get_logger
 from nlm_proxy.core.response_cache import ResponseCache
 from nlm_proxy.core.tracing import init_tracing, shutdown_tracing, instrument_fastapi, instrument_httpx, get_tracer, add_span_attributes
 from nlm_proxy.openai.notebook_cache import NotebookCache
+from nlm_proxy.core.agent import AgentCore, RequestOptions, RoutingDecision
+from nlm_proxy.core.llm_client import LangChainLLMClient, create_chat_model
+from nlm_proxy.core.config import get_agent_settings
 from nlm_proxy.openai.router import SmartRouter, RequestType
 from nlm_proxy.openai.session import SessionStore
 from nlm_proxy.openai.types import (
@@ -46,7 +49,8 @@ app.state.notebook_cache = None
 app.state.response_cache = None
 # Initialize auth refresh service (will be configured in main())
 app.state.auth_refresh_service = None
-
+# Initialize agent core (will be configured in main())
+app.state.agent_core = None
 
 def verify_api_key(authorization: Annotated[str | None, Header()] = None) -> None:
     """Verify the API key from Authorization header."""
@@ -1110,10 +1114,30 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
                 # Now wire notebook_cache back to the client
                 nlm_client._notebook_cache = app.state.notebook_cache
                 logger.info(f"Notebook cache initialized with TTL={routing_settings.summary_cache_ttl}s")
+
+                # Create shared ChatModel for routing, L3 verification, and LLM_TASK
+                agent_settings = get_agent_settings()
+                chat_model = create_chat_model(
+                    model=routing_settings.llm_model,
+                    provider=agent_settings.llm_provider,
+                    base_url=routing_settings.llm_base_url,
+                    api_key=routing_settings.llm_api_key,
+                )
+
+                # Create AgentCore singleton (replaces per-request SmartRouter)
+                app.state.agent_core = AgentCore(
+                    nlm_client=nlm_client,
+                    notebook_cache=app.state.notebook_cache,
+                    response_cache=app.state.response_cache,
+                    chat_model=chat_model,
+                    session_store=app.state.session_store,
+                    routing_settings=routing_settings,
+                )
+                logger.info("AgentCore initialized (singleton)")
             else:
                 logger.warning("Smart routing configured but no auth tokens found - cache not initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize notebook cache: {e}")
+            logger.error(f"Failed to initialize notebook cache / AgentCore: {e}")
     else:
         logger.debug("Smart routing not configured (no llm_api_key) - notebook cache not initialized")
 
