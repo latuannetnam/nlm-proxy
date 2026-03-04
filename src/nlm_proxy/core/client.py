@@ -120,9 +120,7 @@ def _parse_url_params(url: str) -> dict[str, Any]:
         return {}
 
 
-class AuthenticationError(Exception):
-    """Raised when authentication fails (HTTP 401/403 or RPC Error 16)."""
-    pass
+from nlm_proxy.core.exceptions import AuthenticationError  # noqa: F401
 
 
 # Timeout configuration (seconds)

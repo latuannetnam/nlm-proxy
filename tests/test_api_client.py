@@ -20,7 +20,6 @@ def mock_client():
 class TestNotebookLMClientAuth:
     """Test authentication and retry logic."""
 
-    @pytest.mark.skip(reason="Test correctly raises exception but pytest.raises() matching issue - TODO: fix assertion")
     def test_rpc_error_16_detection(self, mock_client):
         """Test that RPC Error 16 (auth expired) is correctly detected."""
         # This response mimics the structure of an RPC Error 16
@@ -114,18 +113,17 @@ class TestNotebookLMClientAuth:
             assert result == {"status": "ok"}
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Broken by fixture changes - TODO: fix mock_client fixture to allow unmocking")
-    async def test_refresh_auth_tokens_success(self, mock_client):
+    async def test_refresh_auth_tokens_success(self):
         """Test that _refresh_auth_tokens extracts tokens correctly."""
+        cookies = {"SID": "test_sid"}
+        client = NotebookLMClient(cookies=cookies, csrf_token="old_token", session_id="old_sid")
 
         # Simplified HTML to minimize whitespace issues
         # api_client.py looks for "FdrFJe":"..." for the session ID
         html = '<html><script>WIZ_global_data = {"SNlM0e":"new_csrf_token", "FdrFJe":"123456789"};</script></html>'
 
-        # Restore the original method for this test
-        original_method = NotebookLMClient._refresh_auth_tokens
-
-        with patch("httpx.AsyncClient") as MockClient:
+        with patch("httpx.AsyncClient") as MockClient, \
+             patch.object(client, '_update_cached_tokens'):
             # Mock the async context manager behavior
             client_instance = MagicMock()
             MockClient.return_value.__aenter__ = AsyncMock(return_value=client_instance)
@@ -134,18 +132,16 @@ class TestNotebookLMClientAuth:
             req = httpx.Request("GET", "https://notebooklm.google.com/")
             client_instance.get = AsyncMock(return_value=httpx.Response(200, request=req, text=html))
 
-            # Call the real method bound to the instance
-            await original_method(mock_client)
+            await client._refresh_auth_tokens()
 
-            assert mock_client.csrf_token == "new_csrf_token"
-            assert mock_client._session_id == "123456789"
+            assert client.csrf_token == "new_csrf_token"
+            assert client._session_id == "123456789"
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Broken by fixture changes - TODO: fix mock_client fixture to allow unmocking")
-    async def test_refresh_auth_tokens_redirect_login(self, mock_client):
+    async def test_refresh_auth_tokens_redirect_login(self):
         """Test that redirect into login (expired cookies) raises ValueError."""
-
-        original_method = NotebookLMClient._refresh_auth_tokens
+        cookies = {"SID": "test_sid"}
+        client = NotebookLMClient(cookies=cookies, csrf_token="old_token", session_id="old_sid")
 
         with patch("httpx.AsyncClient") as MockClient:
             # Mock the async context manager behavior
@@ -154,13 +150,12 @@ class TestNotebookLMClientAuth:
             MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Mock redirect to accounts.google.com
-            # Note: httpx follows redirects so the final response URL is the login page
             request = httpx.Request("GET", "https://accounts.google.com/ServiceLogin")
             resp = httpx.Response(200, request=request, text="login page")
             client_instance.get = AsyncMock(return_value=resp)
 
             with pytest.raises(ValueError, match="Authentication expired"):
-                await original_method(mock_client)
+                await client._refresh_auth_tokens()
 
     @pytest.mark.asyncio
     async def test_get_notebook_sources_extracts_url(self, mock_client):

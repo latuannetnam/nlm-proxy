@@ -177,7 +177,7 @@ def test_chat_completions_streaming_with_thinking():
 
 
 @pytest.mark.openai
-@pytest.mark.skip(reason="Server module doesn't support --help flag without starting uvicorn")
+@pytest.mark.skip(reason="DEFERRED TO STAGE 8: Server module uses uvicorn.run() directly, needs CLI framework for --help")
 def test_cli_help():
     # CLI help test needs api_key in env for module to load
     env = os.environ.copy()

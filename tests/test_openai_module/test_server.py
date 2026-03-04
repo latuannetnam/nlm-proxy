@@ -46,7 +46,7 @@ def test_list_models_includes_smart_router(mock_settings):
         assert "nb-123" in model_ids
 
 
-@pytest.mark.skip(reason="Returns 503 - TODO: fix mock setup for router initialization with notebook cache")
+@pytest.mark.skip(reason="DEFERRED TO STAGE 6: Will be rewritten when server is rewired to use AgentCore + LangGraph routing")
 def test_chat_completions_smart_routing_notebooklm(mock_settings):
     """Test smart routing to NotebookLM."""
     from nlm_proxy.openai.server import app
