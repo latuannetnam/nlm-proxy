@@ -177,20 +177,16 @@ def test_chat_completions_streaming_with_thinking():
 
 
 @pytest.mark.openai
-@pytest.mark.skip(reason="DEFERRED TO STAGE 8: Server module uses uvicorn.run() directly, needs CLI framework for --help")
 def test_cli_help():
-    # CLI help test needs api_key in env for module to load
-    env = os.environ.copy()
-    env["NLM_PROXY_OPENAI_API_KEY"] = TEST_API_KEY
-    result = subprocess.run(
-        [sys.executable, "-m", "nlm_proxy.openai.server", "--help"],
-        capture_output=True,
-        text=True,
-        env=env
-    )
-    assert result.returncode == 0
-    assert "--port" in result.stdout
-    assert "--host" in result.stdout
+    """Test that 'nlm-proxy serve openai --help' outputs expected options."""
+    from typer.testing import CliRunner
+    from nlm_proxy.cli import app as cli_app
+
+    runner = CliRunner()
+    result = runner.invoke(cli_app, ["serve", "openai", "--help"])
+    assert result.exit_code == 0
+    assert "--port" in result.output
+    assert "--host" in result.output
 
 
 @pytest.mark.openai
