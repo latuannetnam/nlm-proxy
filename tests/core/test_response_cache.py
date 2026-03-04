@@ -45,10 +45,11 @@ class TestResponseCacheLayer1:
             thinking=None,
             conversation_id="conv-1",
         )
-        result = cache.lookup(notebook_id="nb-1", query="What are the key points?")
+        result, hit_type = cache.lookup(notebook_id="nb-1", query="What are the key points?")
         assert result is not None
         assert result.answer == "The key points are..."
         assert result.hit_count == 1
+        assert hit_type == "exact"
 
     def test_exact_match_case_insensitive(self):
         """Query matching should be case-insensitive."""
@@ -60,8 +61,9 @@ class TestResponseCacheLayer1:
             thinking=None,
             conversation_id="conv-1",
         )
-        result = cache.lookup(notebook_id="nb-1", query="WHAT ARE THE KEY POINTS?")
+        result, hit_type = cache.lookup(notebook_id="nb-1", query="WHAT ARE THE KEY POINTS?")
         assert result is not None
+        assert hit_type == "exact"
 
     def test_exact_match_strips_whitespace(self):
         """Query matching should strip whitespace."""
@@ -73,7 +75,7 @@ class TestResponseCacheLayer1:
             thinking=None,
             conversation_id="conv-1",
         )
-        result = cache.lookup(notebook_id="nb-1", query="  What are the key points?  ")
+        result, hit_type = cache.lookup(notebook_id="nb-1", query="  What are the key points?  ")
         assert result is not None
 
     def test_different_notebook_no_match(self):
@@ -86,8 +88,9 @@ class TestResponseCacheLayer1:
             thinking=None,
             conversation_id="conv-1",
         )
-        result = cache.lookup(notebook_id="nb-2", query="key points?")
+        result, hit_type = cache.lookup(notebook_id="nb-2", query="key points?")
         assert result is None
+        assert hit_type is None
 
     def test_different_query_no_match(self):
         """Different query should NOT match."""
@@ -99,8 +102,9 @@ class TestResponseCacheLayer1:
             thinking=None,
             conversation_id="conv-1",
         )
-        result = cache.lookup(notebook_id="nb-1", query="Who are the team members?")
+        result, hit_type = cache.lookup(notebook_id="nb-1", query="Who are the team members?")
         assert result is None
+        assert hit_type is None
 
     def test_ttl_expiration(self):
         """Entries should expire after TTL."""
@@ -112,9 +116,11 @@ class TestResponseCacheLayer1:
             thinking=None,
             conversation_id="conv-1",
         )
-        assert cache.lookup(notebook_id="nb-1", query="key points?") is not None
+        result, hit_type = cache.lookup(notebook_id="nb-1", query="key points?")
+        assert result is not None
         time.sleep(0.15)
-        assert cache.lookup(notebook_id="nb-1", query="key points?") is None
+        result, hit_type = cache.lookup(notebook_id="nb-1", query="key points?")
+        assert result is None
 
     def test_lru_eviction(self):
         """LRU should evict oldest entries when max_entries exceeded."""
@@ -128,9 +134,11 @@ class TestResponseCacheLayer1:
                 conversation_id=f"conv-{i}",
             )
         # First entry should be evicted
-        assert cache.lookup(notebook_id="nb-1", query="query 0") is None
+        result, _ = cache.lookup(notebook_id="nb-1", query="query 0")
+        assert result is None
         # Last entry should exist
-        assert cache.lookup(notebook_id="nb-1", query="query 3") is not None
+        result, _ = cache.lookup(notebook_id="nb-1", query="query 3")
+        assert result is not None
 
     def test_hit_count_increments(self):
         """hit_count should increment on each cache hit."""
@@ -144,7 +152,7 @@ class TestResponseCacheLayer1:
         )
         cache.lookup(notebook_id="nb-1", query="key points?")
         cache.lookup(notebook_id="nb-1", query="key points?")
-        result = cache.lookup(notebook_id="nb-1", query="key points?")
+        result, _ = cache.lookup(notebook_id="nb-1", query="key points?")
         assert result.hit_count == 3
 
     def test_bypass_cache_flag(self):
@@ -157,12 +165,13 @@ class TestResponseCacheLayer1:
             thinking=None,
             conversation_id="conv-1",
         )
-        result = cache.lookup(
+        result, hit_type = cache.lookup(
             notebook_id="nb-1",
             query="key points?",
             bypass_cache=True,
         )
         assert result is None
+        assert hit_type is None
 
     def test_store_with_bypass_updates_existing(self):
         """bypass_cache store should update existing entry."""
@@ -181,7 +190,7 @@ class TestResponseCacheLayer1:
             thinking=None,
             conversation_id="conv-2",
         )
-        result = cache.lookup(notebook_id="nb-1", query="key points?")
+        result, _ = cache.lookup(notebook_id="nb-1", query="key points?")
         assert result.answer == "Fresh answer"
 
     def test_empty_or_error_response_not_cached(self):
@@ -194,7 +203,7 @@ class TestResponseCacheLayer1:
             thinking=None,
             conversation_id="conv-1",
         )
-        result = cache.lookup(notebook_id="nb-1", query="key points?")
+        result, _ = cache.lookup(notebook_id="nb-1", query="key points?")
         assert result is None
 
     def test_invalidate_notebook(self):
@@ -215,9 +224,9 @@ class TestResponseCacheLayer1:
 
         cache.invalidate_notebook("nb-1")
 
-        assert cache.lookup(notebook_id="nb-1", query="q1") is None
-        assert cache.lookup(notebook_id="nb-1", query="q2") is None
-        assert cache.lookup(notebook_id="nb-2", query="q3") is not None
+        assert cache.lookup(notebook_id="nb-1", query="q1")[0] is None
+        assert cache.lookup(notebook_id="nb-1", query="q2")[0] is None
+        assert cache.lookup(notebook_id="nb-2", query="q3")[0] is not None
 
     def test_clear_all(self):
         """clear() should remove all entries."""
@@ -233,8 +242,8 @@ class TestResponseCacheLayer1:
 
         cache.clear()
 
-        assert cache.lookup(notebook_id="nb-1", query="q1") is None
-        assert cache.lookup(notebook_id="nb-2", query="q2") is None
+        assert cache.lookup(notebook_id="nb-1", query="q1")[0] is None
+        assert cache.lookup(notebook_id="nb-2", query="q2")[0] is None
 
     def test_global_cache_across_users(self):
         """Cache is global — same notebook_id + query returns same entry."""
@@ -247,7 +256,7 @@ class TestResponseCacheLayer1:
             conversation_id="conv-1",
         )
         # "User B" queries same thing — should get cached answer
-        result = cache.lookup(notebook_id="nb-1", query="key points?")
+        result, _ = cache.lookup(notebook_id="nb-1", query="key points?")
         assert result is not None
         assert result.answer == "Shared answer"
 
@@ -261,7 +270,7 @@ class TestResponseCacheLayer1:
             thinking="Let me analyze the document...",
             conversation_id="conv-1",
         )
-        result = cache.lookup(notebook_id="nb-1", query="key points?")
+        result, _ = cache.lookup(notebook_id="nb-1", query="key points?")
         assert result.thinking == "Let me analyze the document..."
 
 
@@ -281,16 +290,18 @@ class TestGlobalLookup:
             notebook_id="nb1", query="test query", answer="answer",
             thinking=None, conversation_id="conv1",
         )
-        result = cache.lookup_global("test query")
+        result, hit_type = cache.lookup_global("test query")
         assert result is not None
         assert result.answer == "answer"
         assert result.notebook_id == "nb1"
+        assert hit_type == "exact"
 
     def test_lookup_global_miss(self):
-        """Global lookup returns None when query not cached."""
+        """Global lookup returns (None, None) when query not cached."""
         cache = self._make_cache()
-        result = cache.lookup_global("unknown query")
+        result, hit_type = cache.lookup_global("unknown query")
         assert result is None
+        assert hit_type is None
 
     def test_lookup_global_case_insensitive(self):
         """Global lookup normalizes case."""
@@ -299,7 +310,7 @@ class TestGlobalLookup:
             notebook_id="nb1", query="Hello World", answer="answer",
             thinking=None, conversation_id="conv1",
         )
-        result = cache.lookup_global("hello world")
+        result, hit_type = cache.lookup_global("hello world")
         assert result is not None
 
     def test_lookup_global_after_eviction(self):
@@ -309,22 +320,22 @@ class TestGlobalLookup:
         cache.store(notebook_id="nb1", query="q2", answer="a2", thinking=None, conversation_id="c2")
         cache.store(notebook_id="nb1", query="q3", answer="a3", thinking=None, conversation_id="c3")
         # q1 should be evicted
-        assert cache.lookup_global("q1") is None
-        assert cache.lookup_global("q3") is not None
+        assert cache.lookup_global("q1")[0] is None
+        assert cache.lookup_global("q3")[0] is not None
 
     def test_lookup_global_after_invalidation(self):
         """Global index cleaned up on notebook invalidation."""
         cache = self._make_cache()
         cache.store(notebook_id="nb1", query="q1", answer="a1", thinking=None, conversation_id="c1")
         cache.invalidate_notebook("nb1")
-        assert cache.lookup_global("q1") is None
+        assert cache.lookup_global("q1")[0] is None
 
     def test_lookup_global_after_clear(self):
         """Global index cleaned up on clear."""
         cache = self._make_cache()
         cache.store(notebook_id="nb1", query="q1", answer="a1", thinking=None, conversation_id="c1")
         cache.clear()
-        assert cache.lookup_global("q1") is None
+        assert cache.lookup_global("q1")[0] is None
 
 
 class TestAliasCreation:
@@ -343,15 +354,16 @@ class TestAliasCreation:
             notebook_id="nb1", query="original query", answer="answer",
             thinking=None, conversation_id="conv1",
         )
-        original_entry = cache.lookup("nb1", "original query")
+        original_entry, _ = cache.lookup("nb1", "original query")
 
         # Create alias
         cache.create_alias("nb1", "rewritten query", original_entry)
 
         # Alias should hit L1
-        result = cache.lookup("nb1", "rewritten query")
+        result, hit_type = cache.lookup("nb1", "rewritten query")
         assert result is not None
         assert result.answer == "answer"
+        assert hit_type == "exact"
 
     def test_alias_in_global_index(self):
         """Alias also available in global lookup."""
@@ -360,11 +372,12 @@ class TestAliasCreation:
             notebook_id="nb1", query="original", answer="answer",
             thinking=None, conversation_id="conv1",
         )
-        entry = cache.lookup("nb1", "original")
+        entry, _ = cache.lookup("nb1", "original")
         cache.create_alias("nb1", "alias query", entry)
-        result = cache.lookup_global("alias query")
+        result, hit_type = cache.lookup_global("alias query")
         assert result is not None
         assert result.answer == "answer"
+        assert hit_type == "exact"
 
     def test_alias_not_counted_in_lru(self):
         """Aliases don't consume LRU capacity."""
@@ -373,7 +386,7 @@ class TestAliasCreation:
             notebook_id="nb1", query="primary", answer="answer",
             thinking=None, conversation_id="conv1",
         )
-        entry = cache.lookup("nb1", "primary")
+        entry, _ = cache.lookup("nb1", "primary")
         # Create 5 aliases
         for i in range(5):
             cache.create_alias("nb1", f"alias {i}", entry)
@@ -389,11 +402,11 @@ class TestAliasCreation:
             notebook_id="nb1", query="primary", answer="answer",
             thinking=None, conversation_id="conv1",
         )
-        entry = cache.lookup("nb1", "primary")
+        entry, _ = cache.lookup("nb1", "primary")
         cache.create_alias("nb1", "alias", entry)
         cache.invalidate_notebook("nb1")
-        assert cache.lookup("nb1", "alias") is None
-        assert cache.lookup_global("alias") is None
+        assert cache.lookup("nb1", "alias")[0] is None
+        assert cache.lookup_global("alias")[0] is None
 
     def test_alias_cleaned_on_clear(self):
         """Aliases cleaned up on full clear."""
@@ -402,7 +415,41 @@ class TestAliasCreation:
             notebook_id="nb1", query="primary", answer="answer",
             thinking=None, conversation_id="conv1",
         )
-        entry = cache.lookup("nb1", "primary")
+        entry, _ = cache.lookup("nb1", "primary")
         cache.create_alias("nb1", "alias", entry)
         cache.clear()
-        assert cache.lookup("nb1", "alias") is None
+        assert cache.lookup("nb1", "alias")[0] is None
+
+
+class TestLookupReturnsTuples:
+    """Verify lookup methods return (CachedResponse, hit_type) tuples."""
+
+    def test_lookup_returns_cache_hit_type(self):
+        """Lookup result should return (CachedResponse, hit_type) tuple."""
+        from nlm_proxy.core.response_cache import ResponseCache
+
+        cache = ResponseCache(max_entries=100, ttl_seconds=3600, semantic_enabled=False)
+        cache.store("nb-1", "key points?", "answer", None, "conv-1")
+
+        result, hit_type = cache.lookup("nb-1", "key points?")
+        assert result is not None
+        assert hit_type == "exact"
+
+        result, hit_type = cache.lookup("nb-1", "nonexistent")
+        assert result is None
+        assert hit_type is None
+
+    def test_lookup_global_returns_tuple(self):
+        """lookup_global should return (CachedResponse, hit_type) tuple."""
+        from nlm_proxy.core.response_cache import ResponseCache
+
+        cache = ResponseCache(max_entries=100, ttl_seconds=3600, semantic_enabled=False)
+        cache.store("nb-1", "test", "answer", None, "conv-1")
+
+        result, hit_type = cache.lookup_global("test")
+        assert result is not None
+        assert hit_type == "exact"
+
+        result, hit_type = cache.lookup_global("missing")
+        assert result is None
+        assert hit_type is None

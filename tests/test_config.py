@@ -310,9 +310,9 @@ class TestCacheSettings:
         assert settings.response_cache_ttl == 14400
         assert settings.response_cache_max_entries == 1000
         assert settings.semantic_match_enabled is True
-        assert settings.embedding_model == "intfloat/multilingual-e5-small"
-        assert settings.similarity_threshold == 0.7
-        assert settings.similarity_exact_threshold == 0.95
+        assert settings.embedding_model == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        assert settings.similarity_threshold == 0.5
+        assert settings.similarity_exact_threshold == 0.85
         assert settings.semantic_match_top_k == 10
 
     def test_env_override(self, monkeypatch):
@@ -344,4 +344,28 @@ class TestCacheSettings:
 
         s1 = config.get_cache_settings()
         s2 = config.get_cache_settings()
+        assert s1 is s2
+
+
+class TestAgentSettings:
+    """Test AgentSettings class."""
+
+    def test_agent_settings_defaults(self):
+        """Test AgentSettings has expected defaults."""
+        from nlm_proxy.core.config import get_agent_settings
+        import nlm_proxy.core.config as config
+        config._agent = None  # Reset singleton
+        settings = get_agent_settings()
+        assert settings.llm_provider == "openai"
+        assert settings.embedding_provider == "huggingface"
+        assert settings.memory_backend == "memory"
+        assert settings.agent_max_iterations == 10
+        assert settings.agent_fallback_on_error is True
+
+    def test_get_agent_settings_singleton(self):
+        """get_agent_settings should return singleton."""
+        import nlm_proxy.core.config as config
+        config._agent = None
+        s1 = config.get_agent_settings()
+        s2 = config.get_agent_settings()
         assert s1 is s2

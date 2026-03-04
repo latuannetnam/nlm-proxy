@@ -31,7 +31,7 @@ def test_tracing_settings_defaults(monkeypatch, tmp_path):
     settings = TracingSettings()
 
     assert settings.enabled is False
-    assert settings.endpoint == "http://localhost:4317"
+    assert settings.endpoint == "localhost:4317"
     assert settings.service_name == "nlm-proxy"
 
 

@@ -20,7 +20,8 @@ class TestTracingIntegration:
         settings = TracingSettings(
             enabled=True,
             endpoint="localhost:4317",
-            # All other fields use defaults
+            protocol="grpc",
+            insecure=True,
         )
 
         with patch("nlm_proxy.core.tracing.get_tracing_settings", return_value=settings):
@@ -76,5 +77,6 @@ class TestTracingIntegration:
 
                 mock.assert_called_once()
                 call_kwargs = mock.call_args[1]
-                assert call_kwargs["certificate_verification"] is False
+                # Implementation uses env vars (PYTHONHTTPSVERIFY, REQUESTS_CA_BUNDLE)
+                # to disable cert verification, not a kwarg to the exporter
                 assert call_kwargs["endpoint"] == "https://collector:4318/v1/traces"

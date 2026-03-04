@@ -288,6 +288,25 @@ class CacheSettings(BaseSettings):
     )
 
 
+class AgentSettings(BaseSettings):
+    """LangChain/LangGraph agent configuration (additive — does not replace existing)."""
+
+    llm_provider: str = Field(default="openai", description="LLM provider")
+    embedding_provider: str = Field(default="huggingface", description="Embedding provider")
+    memory_backend: str = Field(default="memory", description="memory | sqlite | postgres")
+    memory_db_path: str = Field(default="~/.nlm-proxy/memory.db")
+    agent_max_iterations: int = Field(default=10)
+    agent_verbose: bool = Field(default=False)
+    agent_fallback_on_error: bool = Field(default=True)
+
+    model_config = SettingsConfigDict(
+        env_prefix="NLM_PROXY_AGENT_",
+        env_file=_get_env_files(),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 # Singleton instances
 _shared: SharedSettings | None = None
 _logging: LoggingSettings | None = None
@@ -297,6 +316,7 @@ _auth: AuthSettings | None = None
 _routing: SmartRoutingSettings | None = None
 _tracing: TracingSettings | None = None
 _cache: CacheSettings | None = None
+_agent: AgentSettings | None = None
 
 
 def get_shared_settings() -> SharedSettings:
@@ -361,6 +381,14 @@ def get_cache_settings() -> CacheSettings:
     if _cache is None:
         _cache = CacheSettings()
     return _cache
+
+
+def get_agent_settings() -> "AgentSettings":
+    """Get the agent settings instance."""
+    global _agent
+    if _agent is None:
+        _agent = AgentSettings()
+    return _agent
 
 
 # Keep backward compatibility aliases

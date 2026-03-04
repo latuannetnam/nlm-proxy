@@ -368,12 +368,11 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
             # Phase 1: Pre-routing global L1 check (instant, skips routing)
             if not request.bypass_cache and app.state.response_cache:
-                cache_result = app.state.response_cache.lookup_global(query)
+                cache_result, hit_type = app.state.response_cache.lookup_global(query)
                 if cache_result:
                     cached_notebook_id = cache_result.notebook_id
                     # ACL check: is the cached notebook accessible?
                     if request_allowed_notebooks is None or cached_notebook_id in request_allowed_notebooks:
-                        hit_type = app.state.response_cache._last_hit_type or "exact"
                         logger.info(
                             "[CACHE] Pre-routing L1 HIT: query='%s', notebook=%s (skipped routing)",
                             query[:80], cached_notebook_id[:12],
@@ -433,9 +432,8 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                     "[CACHE] Checking cache: query='%s', notebook=%s, is_first_turn=%s",
                     query[:80], decision.notebook_id[:12], is_first_turn,
                 )
-                cache_result = await app.state.response_cache.lookup_async(decision.notebook_id, query)
+                cache_result, hit_type = await app.state.response_cache.lookup_async(decision.notebook_id, query)
                 if cache_result:
-                    hit_type = app.state.response_cache._last_hit_type or "exact"
                     async def stream_cached_smart(cache_result, hit_type, reasoning="Cache hit — returning cached response."):
                         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
                         created = int(time.time())
@@ -501,12 +499,11 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
 
             # Phase 1: Pre-routing global L1 check (instant, skips routing)
             if not request.bypass_cache and app.state.response_cache:
-                cache_result = app.state.response_cache.lookup_global(query)
+                cache_result, hit_type = app.state.response_cache.lookup_global(query)
                 if cache_result:
                     cached_notebook_id = cache_result.notebook_id
                     # ACL check: is the cached notebook accessible?
                     if request_allowed_notebooks is None or cached_notebook_id in request_allowed_notebooks:
-                        hit_type = app.state.response_cache._last_hit_type or "exact"
                         logger.info(
                             "[CACHE] Pre-routing L1 HIT (non-stream): query='%s', notebook=%s (skipped routing)",
                             query[:80], cached_notebook_id[:12],
@@ -561,9 +558,8 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
                         "[CACHE] Checking cache: query='%s', notebook=%s, is_first_turn=%s",
                         query[:80], decision.notebook_id[:12], is_first_turn,
                     )
-                    cache_result = await app.state.response_cache.lookup_async(decision.notebook_id, query)
+                    cache_result, hit_type = await app.state.response_cache.lookup_async(decision.notebook_id, query)
                     if cache_result:
-                        hit_type = app.state.response_cache._last_hit_type or "exact"
                         from fastapi.responses import JSONResponse
                         resp = ChatCompletionResponse(
                             id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -814,9 +810,8 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
             is_first_turn = False
 
     if not request.bypass_cache and app.state.response_cache:
-        cache_result = await app.state.response_cache.lookup_async(request.model, query_text)
+        cache_result, hit_type = await app.state.response_cache.lookup_async(request.model, query_text)
         if cache_result:
-            hit_type = app.state.response_cache._last_hit_type or "exact"
             if request.stream:
                 # Streaming cache HIT: yield cached answer as SSE chunks
                 async def stream_cached_response(cache_result, hit_type):

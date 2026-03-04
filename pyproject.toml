@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nlm-proxy"
-version = "1.1.1"
+version = "1.2.0"
 description = "NotebookLM client library with MCP and OpenAI interfaces"
 readme = "README.md"
 license = "MIT"
@@ -40,13 +40,20 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
     "opentelemetry-instrumentation-fastapi>=0.41b0",
     "opentelemetry-instrumentation-httpx>=0.41b0",
+    # LangChain + LangGraph
+    "langchain>=0.3",
+    "langchain-openai>=0.3",
+    "langchain-huggingface>=0.1",
+    "langgraph>=0.2",
+    "langgraph-checkpoint>=2.0",
     # Response cache (embedding + similarity)
-    "fastembed>=0.4",
     "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
-cache-gpu = ["fastembed-gpu>=0.4", "numpy>=1.24"]
+cache-gpu = ["torch>=2.0"]
+anthropic = ["langchain-anthropic>=0.3"]
+ollama = ["langchain-ollama>=0.3"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

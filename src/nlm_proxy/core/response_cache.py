@@ -62,9 +62,6 @@ class ResponseCache:
         self._similarity_exact_threshold = similarity_exact_threshold
         self._top_k = top_k
 
-        # Last lookup result type: 'exact', 'semantic', or None
-        self._last_hit_type: str | None = None
-
         # Layer 1: hash → CachedResponse
         self._cache_by_hash: dict[str, CachedResponse] = {}
         # Global index: query-only hash → CachedResponse (no notebook_id)
@@ -128,30 +125,29 @@ class ResponseCache:
 
     # ── Pre-routing Global L1 ────────────────────────────────────────────
 
-    def lookup_global(self, query: str) -> CachedResponse | None:
+    def lookup_global(self, query: str) -> tuple[CachedResponse | None, str | None]:
         """Pre-routing L1 lookup: find cached entry by query only (no notebook_id).
 
-        Returns CachedResponse on hit (caller must validate notebook ACL),
-        None on miss.
+        Returns (CachedResponse, hit_type) on hit, (None, None) on miss.
+        Caller must validate notebook ACL.
         """
         global_hash = self._compute_global_hash(query)
         with self._lock:
             entry = self._global_hash_index.get(global_hash)
             if entry is None:
-                return None
+                return None, None
             # Check TTL
             age = time.time() - entry.cached_at
             if age > self._ttl_seconds:
                 logger.debug("[CACHE] Global L1 EXPIRED for '%s'", query[:80])
-                return None
+                return None, None
             entry.hit_count += 1
             logger.info(
                 "[CACHE] Global L1 HIT for '%s' (notebook=%s, hits=%d, age=%.0fs)",
                 query[:80], entry.notebook_id[:12], entry.hit_count, age,
             )
-            self._last_hit_type = "exact"
             self._stats["pre_routing_l1_hits"] += 1
-            return entry
+            return entry, "exact"
 
     # ── Alias Creation ────────────────────────────────────────────────────
 
@@ -265,16 +261,15 @@ class ResponseCache:
         notebook_id: str,
         query: str,
         bypass_cache: bool = False,
-    ) -> CachedResponse | None:
+    ) -> tuple[CachedResponse | None, str | None]:
         """Layer 1 exact-match lookup (synchronous).
 
-        Returns CachedResponse on hit, None on miss.
+        Returns (CachedResponse, "exact") on hit, (None, None) on miss.
         """
         if bypass_cache:
             logger.debug("[CACHE] L1 BYPASS for '%s'", query[:80])
-            self._last_hit_type = None
             self._stats["bypasses"] += 1
-            return None
+            return None, None
 
         query_hash = self._compute_hash(notebook_id, query)
 
@@ -285,7 +280,7 @@ class ResponseCache:
                     "[CACHE] L1 MISS for '%s' (hash=%s, notebook=%s)",
                     query[:80], query_hash[:12], notebook_id[:12],
                 )
-                return None
+                return None, None
 
             # Check TTL
             age = time.time() - entry.cached_at
@@ -295,7 +290,7 @@ class ResponseCache:
                     query[:80], age, self._ttl_seconds,
                 )
                 self._remove_entry(entry)
-                return None
+                return None, None
 
             # Update hit count and LRU position
             entry.hit_count += 1
@@ -307,40 +302,38 @@ class ResponseCache:
                 "[CACHE] L1 HIT for '%s' (hits=%d, age=%.0fs, answer_len=%d)",
                 query[:80], entry.hit_count, age, len(entry.answer),
             )
-            self._last_hit_type = "exact"
             self._stats["l1_hits"] += 1
-            return entry
+            return entry, "exact"
 
     async def lookup_async(
         self,
         notebook_id: str,
         query: str,
         bypass_cache: bool = False,
-    ) -> CachedResponse | None:
+    ) -> tuple[CachedResponse | None, str | None]:
         """Full three-layer async lookup: L1 → L2 → L3.
 
         Layer 1: Exact hash match (always)
         Layer 2: Embedding pre-filter (if semantic_enabled)
         Layer 3: LLM verification (if candidates found and not near-exact)
 
-        Returns CachedResponse on hit, None on miss.
+        Returns (CachedResponse, hit_type) on hit, (None, None) on miss.
         """
         if bypass_cache:
             logger.debug("[CACHE] BYPASS (async) for '%s'", query[:80])
-            self._last_hit_type = None
             self._stats["bypasses"] += 1
-            return None
+            return None, None
 
         # Layer 1: exact hash match
-        result = self.lookup(notebook_id, query)
+        result, hit_type = self.lookup(notebook_id, query)
         if result is not None:
-            return result
+            return result, hit_type
 
         # Layers 2-3 only if semantic matching is enabled
         if not self._semantic_enabled:
             logger.debug("[CACHE] Semantic matching disabled, skipping L2/L3")
             self._stats["misses"] += 1
-            return None
+            return None, None
 
         # Layer 2: compute embedding and find similar
         logger.debug("[CACHE] L2 computing embedding for '%s'", query[:80])
@@ -348,13 +341,13 @@ class ResponseCache:
         if query_emb is None:
             logger.debug("[CACHE] L2 embedding failed, skipping")
             self._stats["misses"] += 1
-            return None
+            return None, None
 
         candidates = self._find_similar(query_emb, notebook_id)
         if not candidates:
             logger.debug("[CACHE] L2 MISS — no similar entries for '%s'", query[:80])
             self._stats["misses"] += 1
-            return None
+            return None, None
 
         # Check if early termination (similarity >= exact threshold)
         if len(candidates) == 1 and candidates[0][0] >= self._similarity_exact_threshold:
@@ -365,10 +358,9 @@ class ResponseCache:
                 "[CACHE] L2 HIT (sim=%.4f, skip-LLM) for '%s' → '%s'",
                 candidates[0][0], query[:60], entry.query[:60],
             )
-            self._last_hit_type = "semantic"
             self._stats["l2_hits"] += 1
             self.create_alias(notebook_id, query, entry)
-            return entry
+            return entry, "semantic"
 
         # Layer 3: LLM verification
         logger.info(
@@ -385,16 +377,14 @@ class ResponseCache:
                 "[CACHE] L3 HIT (LLM-verified) for '%s' → '%s'",
                 query[:60], matched.query[:60],
             )
-            self._last_hit_type = "semantic"
             self._stats["l3_hits"] += 1
             self.create_alias(notebook_id, query, matched)
-            return matched
+            return matched, "semantic"
 
         logger.info("[CACHE] L3 MISS — LLM found no match for '%s'", query[:80])
-        self._last_hit_type = None
         self._stats["l3_misses"] += 1
         self._stats["misses"] += 1
-        return None
+        return None, None
 
     # ── Invalidation ─────────────────────────────────────────────────────
 

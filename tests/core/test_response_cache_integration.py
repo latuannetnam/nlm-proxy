@@ -20,10 +20,11 @@ class TestFullCacheLookup:
         )
 
         cache.store("nb-1", "key points?", "answer", None, "conv-1")
-        result = await cache.lookup_async("nb-1", "key points?")
+        result, hit_type = await cache.lookup_async("nb-1", "key points?")
 
         assert result is not None
         assert result.answer == "answer"
+        assert hit_type == "exact"
         mock_llm.complete.assert_not_called()  # L3 not invoked
 
     @pytest.mark.asyncio
@@ -38,9 +39,10 @@ class TestFullCacheLookup:
         )
 
         # No entries stored
-        result = await cache.lookup_async("nb-1", "key points?")
+        result, hit_type = await cache.lookup_async("nb-1", "key points?")
 
         assert result is None
+        assert hit_type is None
         mock_llm.complete.assert_not_called()
 
     @pytest.mark.asyncio
@@ -61,9 +63,10 @@ class TestFullCacheLookup:
 
         # Mock embedding computation to return near-identical vector
         with patch.object(cache, '_compute_embedding', return_value=emb):
-            result = await cache.lookup_async("nb-1", "key points rephrased?")
+            result, hit_type = await cache.lookup_async("nb-1", "key points rephrased?")
 
         assert result is not None
+        assert hit_type == "semantic"
         mock_llm.complete.assert_not_called()  # Skipped L3
 
     @pytest.mark.asyncio
@@ -79,12 +82,14 @@ class TestFullCacheLookup:
         cache.store("nb-1", "exact query", "answer", None, "conv-1")
 
         # Exact match works
-        result = await cache.lookup_async("nb-1", "exact query")
+        result, hit_type = await cache.lookup_async("nb-1", "exact query")
         assert result is not None
+        assert hit_type == "exact"
 
         # Similar but different wording → miss (no semantic matching)
-        result = await cache.lookup_async("nb-1", "rephrase of exact query")
+        result, hit_type = await cache.lookup_async("nb-1", "rephrase of exact query")
         assert result is None
+        assert hit_type is None
 
     def test_lookup_returns_cache_hit_type(self):
         """Lookup result should indicate hit type (exact vs semantic)."""
@@ -93,9 +98,9 @@ class TestFullCacheLookup:
         cache = ResponseCache(max_entries=100, ttl_seconds=3600, semantic_enabled=False)
         cache.store("nb-1", "key points?", "answer", None, "conv-1")
 
-        result = cache.lookup("nb-1", "key points?")
+        result, hit_type = cache.lookup("nb-1", "key points?")
         assert result is not None
-        # The result should be a CachedResponse; hit_type tracked separately by caller
+        assert hit_type == "exact"
 
 
 class TestCacheStats:
