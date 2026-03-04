@@ -119,20 +119,20 @@ User query + RequestOptions (bypass_cache, include_thinking, allowed_notebooks, 
 
 ---
 
-### 2. Prompt Templates → LangChain `PromptTemplate` / `ChatPromptTemplate`
+### 2. Prompt Templates — Simplified (No LangChain PromptTemplate)
 
 **Current**: `openai/prompts/*.txt` — plain text files loaded via `load_prompt()`, formatted with `str.format()`.
 
-**Target**: LangChain `PromptTemplate` with structured input variables.
+**Target**: ~~LangChain `PromptTemplate` with structured input variables.~~ **Simplified**: Keep the existing `load_prompt()` + `str.format()` pattern. LangGraph nodes use `HumanMessage(content=formatted_prompt)` directly — functionally equivalent to `ChatPromptTemplate` without the extra abstraction.
 
-| Prompt | Current File | LangChain Equivalent |
+| Prompt | Current File | After Refactor |
 |--------|-------------|---------------------|
-| classify_request | `prompts/classify_request.txt` | `ChatPromptTemplate` with `{query}` variable |
-| select_notebook | `prompts/select_notebook.txt` | `ChatPromptTemplate` with `{notebooks_json}`, `{query}` |
-| cache_verification | Inline in `response_cache.py` | `PromptTemplate` with `{new_query}`, `{cached_queries}` |
+| classify_request | `prompts/classify_request.txt` | Same file, loaded via `load_prompt()`, wrapped in `HumanMessage` |
+| select_notebook | `prompts/select_notebook.txt` | Same file, loaded via `load_prompt()`, wrapped in `HumanMessage` |
+| cache_verification | Inline in `response_cache.py` | Unchanged — L3 verification uses `LangChainLLMClient.complete()` |
 
-**Effort**: 🟢 Small — ~0.5 day
-**Files changed**: `openai/prompts/__init__.py`, all 3 prompt files, `router.py`, `response_cache.py`
+**Effort**: 🟢 None — no changes needed, existing pattern works with LangChain
+**Files changed**: None
 
 ---
 
@@ -557,12 +557,13 @@ class AgentCore:
 
 | MCP Tool | Current | After |
 |----------|---------|-------|
-| `notebook_query` | `client.query()` directly | `agent.route()` → `agent.query()` with `source_ids` + `timeout` |
-| `notebook_query_stream` | `client.query_stream()` directly | `agent.route()` → `agent.query_stream()` with `source_ids` |
+| `notebook_query` | `client.query()` directly | `agent.query()` directly with `source_ids` + `timeout` (no routing — MCP specifies `notebook_id` explicitly) |
+| `notebook_query_stream` | `client.query_stream()` directly | `agent.query_stream()` directly with `source_ids` (no routing) |
 | All other tools | `client.*()` directly | No change — read/write tools stay direct |
 
 > [!NOTE]
-> Only `notebook_query` and `notebook_query_stream` route through the agent.
+> MCP query tools call `agent.query()` / `agent.query_stream()` **directly** — they do NOT route through the LangGraph routing graph. This is because MCP tools always receive an explicit `notebook_id` parameter from the caller, making routing unnecessary. The `AgentCore` is used only for shared dependencies (NLM client, response cache) and potential future cache integration.
+>
 > All other MCP tools (create, delete, research, studio, etc.) continue using `NotebookLMClient` directly since they are direct CRUD operations, not knowledge queries.
 
 > [!WARNING]
@@ -589,9 +590,10 @@ class AgentCore:
 > async def notebook_query_stream(notebook_id, query, source_ids=None,
 >                                  conversation_id=None, ctx=None):
 >     agent = await get_agent_core()
->     options = RequestOptions(conversation_id=conversation_id, source_ids=source_ids)
->     decision = await agent.route(query, options)
->     async for chunk in agent.query_stream(decision.notebook_id, query, ...):
+>     # No routing — MCP always specifies notebook_id explicitly
+>     async for chunk in agent.query_stream(notebook_id, query,
+>                                            source_ids=source_ids,
+>                                            conversation_id=conversation_id):
 >         if ctx:  # MCP progress reporting — transport-layer concern
 >             await ctx.report_progress(...)
 >         ...
@@ -720,17 +722,13 @@ class AgentSettings(BaseSettings):
 
 ```toml
 [project.dependencies]
-# ADD
-"langchain>=0.3",
-"langchain-openai>=0.3",
-"langchain-anthropic>=0.3",        # Multi-provider day one
-"langchain-community>=0.3",
-"langgraph>=0.3",
-"langgraph-checkpoint>=2.0",
-# Optional backends
-# "langgraph-checkpoint-sqlite" -- for persistent memory
-# "langgraph-checkpoint-postgres" -- for production
-# "langchain-ollama" -- for local models
+# ADD (versions match Plan Stage 1)
+"langchain>=1.2",
+"langchain-openai>=1.1",
+"langchain-huggingface>=1.2",      # HuggingFaceEmbeddings (replaces fastembed)
+"langgraph>=1.0",
+"langgraph-checkpoint>=4.0",
+# NOTE: langchain-community NOT needed — only langchain-huggingface used for embeddings
 
 # KEEP
 "httpx>=0.27.0",
@@ -739,11 +737,18 @@ class AgentSettings(BaseSettings):
 "uvicorn>=0.23.0",
 "fastmcp>=0.1.0",
 "numpy>=1.24",
-"openai>=1.0.0",           # KEEP — used by LLM streaming path (AIMessageChunk ≠ OpenAI chunk)
+"openai>=1.0.0",           # KEEP — used by OpenAI Pydantic types for SSE chunk formatting
 # OpenTelemetry deps -- keep as-is
 
 # REMOVE
-# "fastembed>=0.4" -- replaced by langchain embeddings
+# "fastembed>=0.4" -- replaced by langchain-huggingface
+
+[project.optional-dependencies]
+anthropic = ["langchain-anthropic>=1.0"]  # Multi-provider: Anthropic support
+ollama = ["langchain-ollama>=1.0"]        # Multi-provider: Ollama support
+# Optional backends
+# langgraph-checkpoint-sqlite -- for persistent memory
+# langgraph-checkpoint-postgres -- for production
 ```
 
 ### GPU Embedding Support
