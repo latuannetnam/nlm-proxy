@@ -17,7 +17,7 @@ Uses `_global_hash_index` (query hash without notebook_id) and `pre_routing_l1_h
 | Layer | Mechanism | Latency | When |
 |-------|-----------|---------|------|
 | L1 | Exact hash match | ~0ms | Always |
-| L2 | Embedding cosine similarity (fastembed + NumPy) | ~10-30ms | If semantic enabled |
+| L2 | Embedding cosine similarity (HuggingFace + NumPy) | ~10-30ms | If semantic enabled |
 | L3 | LLM verification | ~1-2s | If L2 finds candidates below exact threshold |
 
 **Early termination:** L2 similarity ≥ 0.85 skips L3 (returns directly). L3 retries once on empty LLM response.
@@ -49,11 +49,11 @@ NLM_PROXY_CACHE_SEMANTIC_MATCH_TOP_K=10
 
 ## Installation
 
-`fastembed` and `numpy` are core dependencies — semantic matching (L2/L3) is always available.
+`langchain-huggingface` and `numpy` are core dependencies — semantic matching (L2/L3) is always available.
 
 ```bash
-uv pip install -e "."              # Core install (includes fastembed + numpy)
-uv pip install -e ".[cache-gpu]"   # GPU-accelerated embeddings
+uv pip install -e "."              # Core install (includes HuggingFace embeddings + numpy)
+uv pip install -e ".[all]"         # All extras including dev tools
 ```
 
 ## Management API

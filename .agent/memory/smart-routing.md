@@ -5,22 +5,34 @@ Smart routing automatically classifies incoming requests and routes them to eith
 ## Overview
 
 When a client uses `model="knowledge-finder"`, the proxy:
-1. Classifies the request using an external LLM
+1. Classifies the request using an external LLM (via LangChain `ChatModel`)
 2. For knowledge queries: selects the best notebook and queries NotebookLM
 3. For general tasks: passes through to the external LLM
+
+## Architecture (post-LangChain refactor)
+
+The routing pipeline uses **AgentCore** as the shared orchestration layer, with a **LangGraph StateGraph** for routing decisions:
+
+```
+Request → AgentCore.route() → LangGraph StateGraph
+  ├─ classify_node() → NOTEBOOKLM | LLM_TASK
+  ├─ select_notebook_node() → notebook_id (if NOTEBOOKLM)
+  └─ RoutingDecision
+```
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `core/config.py` | `SmartRoutingSettings` class with env var bindings |
-| `core/llm_client.py` | `ExternalLLMClient` using OpenAI SDK |
-| `openai/notebook_cache.py` | `NotebookCache` with proactive background refresh, `SourceInfo`, `NotebookInfo` |
-| `openai/router.py` | `SmartRouter`, `RequestType`, `RoutingDecision` |
+| `core/config.py` | `SmartRoutingSettings`, `AgentSettings` classes |
+| `core/llm_client.py` | `LangChainLLMClient`, `create_chat_model()` factory |
+| `core/routing_graph.py` | LangGraph `StateGraph` with classify/select nodes |
+| `core/agent.py` | `AgentCore` singleton (shared by OpenAI + MCP) |
+| `core/notebook_cache.py` | `NotebookCache` with proactive background refresh |
 | `openai/prompts/__init__.py` | `load_prompt()` function |
 | `openai/prompts/classify_request.txt` | Classification prompt template |
 | `openai/prompts/select_notebook.txt` | Notebook selection prompt template |
-| `openai/server.py` | `handle_smart_routing()`, `stream_smart_response()` |
+| `openai/server.py` | `handle_smart_routing()` 4-phase pipeline |
 
 ## Configuration Environment Variables
 
@@ -37,60 +49,38 @@ All use prefix `NLM_PROXY_ROUTING_`:
 | `SOURCE_FETCH_CONCURRENCY` | `10` | Max parallel source summary fetches |
 | `MAX_SOURCE_TITLES` | `15` | Max source titles in selection prompt |
 | `SOURCE_DESCRIPTIONS_ENABLED` | `true` | Include source keywords and summaries |
-| `SOURCE_MAX_KEYWORDS` | `5` | Max keywords per source |
-| `SOURCE_SUMMARY_MAX_CHARS` | `80` | Max chars of source summary |
-| `SOURCE_DESCRIPTIONS_MAX_SOURCES` | `10` | Sources with full descriptions (rest get title only) |
+
+Agent-specific settings (prefix `NLM_PROXY_AGENT_`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_PROVIDER` | `openai` | LangChain provider: openai, anthropic, ollama |
+| `EMBEDDING_PROVIDER` | `huggingface` | huggingface or openai |
+| `FALLBACK_ON_ERROR` | `true` | Fall back to NotebookLM on routing error |
 
 ## Logging Tags
 
 | Tag | Component |
 |-----|-----------|
-| `[LLM]` | ExternalLLMClient - external API calls |
-| `[ROUTER]` | SmartRouter - classification and selection |
+| `[LLM]` | LangChainLLMClient - external API calls |
+| `[ROUTING]` | LangGraph routing graph - classification and selection |
 | `[SMART-ROUTER]` | Server - high-level routing decisions |
 | `[CACHE]` | NotebookCache - cache operations and source fetching |
 
 ## Request Types
 
-- `RequestType.NOTEBOOKLM` - Knowledge queries routed to NotebookLM
-- `RequestType.LLM_TASK` - General tasks passed to external LLM
-
-## Notebook Cache
-
-The `NotebookCache` uses **proactive background refresh** to ensure the cache is always warm:
-
-- **Initial fetch**: Blocking fetch at server startup to pre-populate cache
-- **Background refresh**: Automatic refresh at 80% of TTL (prevents expiration)
-- **Thread-safe**: All operations protected with locks
-- **Graceful shutdown**: Background thread stops cleanly on server shutdown
-
-### Source-Level Information
-
-The cache now fetches source-level information for improved routing accuracy:
-
-- **SourceInfo**: Stores id, title, source_type, summary, and keywords for each source
-- **Parallel fetching**: Uses `asyncio.Semaphore` for controlled concurrency
-- **Graceful degradation**: If source summary fetch fails, keeps source with title only
-
-### NotebookInfo Properties
-
-| Property | Description |
-|----------|-------------|
-| `source_count` | Total number of sources in the notebook |
-| `source_types` | Dict counting sources by type (e.g., `{"pdf": 2, "url": 3}`) |
-| `source_titles` | List of source titles (truncated to 100 chars) |
-
-Cache is shared across all router instances via `app.state.notebook_cache`.
+- `"notebooklm"` - Knowledge queries routed to NotebookLM
+- `"llm_task"` - General tasks passed to external LLM
 
 ## Quick Reference
 
 ```python
-# Classification flow
-router.route(query) -> RoutingDecision
-  -> classify_request(query) -> RequestType
-  -> if NOTEBOOKLM: select_notebook(query) -> notebook_id
+# Routing (via AgentCore -> LangGraph)
+agent_core = AgentCore(nlm_client, notebook_cache, response_cache, chat_model)
+decision = await agent_core.route(query, options)
+# -> RoutingDecision(request_type, notebook_id, reasoning)
 
-# Notebook cache (shared via app.state)
+# NotebookCache (shared via app.state or AgentCore)
 cache = NotebookCache(
     nlm_client,
     ttl_seconds=3600,
@@ -98,18 +88,6 @@ cache = NotebookCache(
 )
 # - Fetches all notebooks and sources at init (blocking)
 # - Refreshes in background before TTL expires
-# - get_all() always returns warm cache with source info
-
-# Selection uses source-level info
-notebooks_info = [{
-    "id": nb.id,
-    "title": nb.title,
-    "summary": nb.summary[:500],
-    "topics": nb.topics[:5],
-    "source_count": nb.source_count,
-    "source_types": nb.source_types,
-    "source_titles": nb.source_titles[:15]
-}]
 ```
 
 See `docs/smart-routing-architecture.md` for detailed architecture diagrams.
