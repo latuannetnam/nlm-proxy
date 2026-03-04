@@ -33,7 +33,10 @@ DEFAULT_MAX_SOURCE_TITLES = 15
 class RouterState(TypedDict):
     """Internal state for the routing graph."""
     query: str
+    messages: list                   # Conversation history (reserved for LangGraph memory)
     request_type: str | None        # "notebooklm" | "llm_task"
+    # NOTE: Design uses `notebook_ids: list[str]` for cross-notebook future.
+    # Current impl uses singular `notebook_id` since cross-notebook is deferred.
     notebook_id: str | None          # Selected notebook UUID
     reasoning: str                   # Human-readable explanation
     available_notebooks: list[dict]  # Populated by nodes
