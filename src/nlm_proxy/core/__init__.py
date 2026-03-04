@@ -23,7 +23,7 @@ from .auth import (
     REQUIRED_COOKIES,
 )
 from .client import NotebookLMClient, Notebook, ConversationTurn, SOURCE_ADD_TIMEOUT
-from .llm_client import ExternalLLMClient
+from .llm_client import LangChainLLMClient, create_chat_model
 from .auth_refresh import AuthRefreshService, refresh_csrf_once, refresh_cookies_once
 
 __all__ = [
@@ -57,8 +57,9 @@ __all__ = [
     "Notebook",
     "ConversationTurn",
     "SOURCE_ADD_TIMEOUT",
-    # External LLM Client
-    "ExternalLLMClient",
+    # LLM Client (LangChain)
+    "LangChainLLMClient",
+    "create_chat_model",
     # Auth refresh service
     "AuthRefreshService",
     "refresh_csrf_once",

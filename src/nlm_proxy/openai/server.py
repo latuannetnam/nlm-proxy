@@ -20,7 +20,7 @@ from nlm_proxy.openai.notebook_cache import NotebookCache
 from nlm_proxy.core.agent import AgentCore, RequestOptions, RoutingDecision
 from nlm_proxy.core.llm_client import LangChainLLMClient, create_chat_model
 from nlm_proxy.core.config import get_agent_settings
-from nlm_proxy.openai.router import SmartRouter, RequestType
+
 from nlm_proxy.openai.session import SessionStore
 from nlm_proxy.openai.types import (
     ChatCompletionRequest,
