@@ -143,68 +143,132 @@ async def list_models():
         await client.close()
 
 
-async def stream_smart_response(client, router: SmartRouter, decision, query: str, request: ChatCompletionRequest, chat_id: str = None, tracing_settings=None, is_first_turn: bool = False):
-    """Stream response with routing reasoning as reasoning_content and response tracing.
+async def _stream_cached_response(decision: RoutingDecision, request: ChatCompletionRequest):
+    """Stream a cached response as SSE (used by both Phase 0 and Phase 2 cache hits)."""
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    created = int(time.time())
+    cache_result = decision.cache_result
+    hit_type = decision.cache_hit_type or "exact"
+
+    # Reasoning chunk
+    reasoning = decision.reasoning or "Cache hit — returning cached response."
+    reasoning_chunk = ChatCompletionChunk(
+        id=chunk_id, created=created, model=request.model,
+        choices=[Choice(delta=DeltaContent(reasoning_content=reasoning + "\n\n"))],
+    )
+    yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
+
+    # Thinking chunk (if available and requested)
+    if cache_result.thinking and request.include_thinking:
+        thinking_chunk = ChatCompletionChunk(
+            id=chunk_id, created=created, model=request.model,
+            choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
+            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+        )
+        yield f"data: {thinking_chunk.model_dump_json()}\n\n"
+
+    # Answer chunk
+    answer_chunk = ChatCompletionChunk(
+        id=chunk_id, created=created, model=request.model,
+        choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
+        system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+    )
+    yield f"data: {answer_chunk.model_dump_json()}\n\n"
+
+    # Final chunk
+    final_chunk = ChatCompletionChunk(
+        id=chunk_id, created=created, model=request.model,
+        choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
+        system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+    )
+    yield f"data: {final_chunk.model_dump_json()}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+def _json_cached_response(decision: RoutingDecision, request: ChatCompletionRequest):
+    """Return a cached response as JSON (non-streaming cache hit)."""
+    from fastapi.responses import JSONResponse
+    cache_result = decision.cache_result
+    hit_type = decision.cache_hit_type or "exact"
+
+    resp = ChatCompletionResponse(
+        id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        created=int(time.time()),
+        model=request.model,
+        choices=[ResponseChoice(
+            index=0,
+            message=ResponseMessage(
+                role="assistant",
+                content=cache_result.answer,
+                reasoning_content=decision.reasoning or "Cache hit — returning cached response.",
+            ),
+            finish_reason="stop",
+        )],
+        usage=Usage(
+            prompt_tokens=len(request.messages[-1].content) if request.messages else 0,
+            completion_tokens=len(cache_result.answer),
+            total_tokens=(len(request.messages[-1].content) if request.messages else 0) + len(cache_result.answer),
+        ),
+        system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+    )
+    return JSONResponse(
+        content=resp.model_dump(),
+        headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
+    )
+
+
+async def stream_smart_response(agent_core: AgentCore, decision: RoutingDecision, query: str,
+                                 request: ChatCompletionRequest, chat_id: str = None,
+                                 tracing_settings=None):
+    """Stream response — Phase 3a of the four-phase pipeline.
 
     Note: This function creates its own span because the span must live for the full
-    streaming duration. The parent function (handle_smart_routing) does NOT create
-    a span for streaming requests to avoid duplicates.
+    streaming duration. The parent function does NOT create a span for streaming.
     """
     tracer = get_tracer(__name__)
 
     with tracer.start_as_current_span("smart_router.handle_request") as span:
-        # Add user_query to span (using configurable max length)
+        # Add user_query to span
         if tracing_settings and tracing_settings.request_max_length > 0:
             span.set_attribute("user_query", query[:tracing_settings.request_max_length])
 
-        # Determine response source
-        response_source = "llm" if decision.request_type == RequestType.LLM_TASK else "notebooklm"
+        response_source = "llm" if decision.request_type == "llm_task" else "notebooklm"
 
         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
         created = int(time.time())
         conversation_id = None
         accumulated_response = ""
 
-        # First, stream the routing decision as reasoning_content
+        # Reasoning chunk
         reasoning_chunk = ChatCompletionChunk(
-            id=chunk_id,
-            created=created,
-            model=request.model,
-            choices=[Choice(delta=DeltaContent(reasoning_content=decision.reasoning + "\n\n"))]
+            id=chunk_id, created=created, model=request.model,
+            choices=[Choice(delta=DeltaContent(reasoning_content=decision.reasoning + "\n\n"))],
         )
         yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
 
-        if decision.request_type == RequestType.LLM_TASK:
-            # Stream from external LLM
-            messages = [{"role": m.role, "content": m.content} for m in request.messages]
-            stream = await router.llm_client.stream(messages)
-            async for chunk in stream:
-                # Safety check: some chunks may have empty choices array
-                if not chunk.choices:
-                    continue
-
-                # Safety check: delta and content may be None
-                delta = chunk.choices[0].delta
-                delta_content = delta.content if delta and delta.content else ""
-
+        if decision.request_type == "llm_task":
+            # LLM_TASK: stream via LangChain ChatModel.astream()
+            from nlm_proxy.core.llm_client import _convert_messages
+            lc_messages = _convert_messages(
+                [{"role": m.role, "content": m.content} for m in request.messages]
+            )
+            async for chunk in agent_core.chat_model.astream(lc_messages):
+                delta_content = chunk.content if chunk.content else ""
                 if delta_content:
-                    accumulated_response += delta_content  # Accumulate for tracing
+                    accumulated_response += delta_content
                     openai_chunk = ChatCompletionChunk(
-                        id=chunk_id,
-                        created=created,
-                        model=request.model,
-                        choices=[Choice(delta=DeltaContent(content=delta_content))]
+                        id=chunk_id, created=created, model=request.model,
+                        choices=[Choice(delta=DeltaContent(content=delta_content))],
                     )
                     yield f"data: {openai_chunk.model_dump_json()}\n\n"
         else:
-            # Stream from NotebookLM - reuse existing logic
+            # NOTEBOOKLM: stream via query_stream
             previous_thinking = ""
             previous_answer = ""
 
-            async for chunk in client.query_stream(
-                notebook_id=decision.notebook_id,
-                query_text=query,
-                conversation_id=request.conversation_id
+            async for chunk in agent_core.query_stream(
+                decision.notebook_id, query,
+                conversation_id=request.conversation_id,
             ):
                 chunk_type = chunk.get("type")
                 full_text = chunk.get("text", "")
@@ -213,12 +277,12 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
                 new_conv_id = chunk.get("conversation_id")
                 if new_conv_id and not conversation_id:
                     conversation_id = new_conv_id
-                    logger.info(f"conversation_id_from_nlm: conversation_id={conversation_id}, notebook_id={decision.notebook_id}")
-                    # Save to session store if we have a chat_id
+                    logger.info("conversation_id_from_nlm: conversation_id=%s, notebook_id=%s", conversation_id, decision.notebook_id)
                     if chat_id and app.state.session_store:
                         app.state.session_store.set(chat_id, conversation_id)
-                        logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conversation_id}")
+                        logger.info("session_saved: chat_id=%s, conversation_id=%s", chat_id, conversation_id)
 
+                # Filter thinking unless requested
                 if chunk_type == "thinking" and not request.include_thinking:
                     previous_thinking = full_text
                     continue
@@ -229,9 +293,7 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
                     if delta_text:
                         delta = DeltaContent(reasoning_content=delta_text)
                         openai_chunk = ChatCompletionChunk(
-                            id=chunk_id,
-                            created=created,
-                            model=request.model,
+                            id=chunk_id, created=created, model=request.model,
                             choices=[Choice(delta=delta)],
                             system_fingerprint=f"conv_{conversation_id}" if conversation_id else None,
                         )
@@ -240,39 +302,35 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
                     delta_text = full_text[len(previous_answer):]
                     previous_answer = full_text
                     if delta_text:
-                        accumulated_response += delta_text  # Accumulate for tracing
+                        accumulated_response += delta_text
                         delta = DeltaContent(content=delta_text)
                         openai_chunk = ChatCompletionChunk(
-                            id=chunk_id,
-                            created=created,
-                            model=request.model,
+                            id=chunk_id, created=created, model=request.model,
                             choices=[Choice(delta=delta)],
                             system_fingerprint=f"conv_{conversation_id}" if conversation_id else None,
                         )
                         yield f"data: {openai_chunk.model_dump_json()}\n\n"
 
-        # Store in response cache for NLM streaming responses
-        # Note: all turns are cached because client rewrites follow-ups into standalone questions
-        if (
-            response_source == "notebooklm"
-            and app.state.response_cache
-            and accumulated_response
-            and conversation_id
-            and decision.notebook_id
-        ):
-            embedding = None
-            if app.state.response_cache._semantic_enabled:
-                emb = app.state.response_cache._compute_embedding(query)
-                if emb is not None:
-                    embedding = emb.tolist()
-            app.state.response_cache.store(
-                notebook_id=decision.notebook_id,
-                query=query,
-                answer=accumulated_response,
-                thinking=previous_thinking if response_source == "notebooklm" else None,
-                conversation_id=conversation_id,
-                embedding=embedding,
-            )
+            # Store in response cache after stream completes
+            if (
+                agent_core.response_cache
+                and accumulated_response
+                and conversation_id
+                and decision.notebook_id
+            ):
+                embedding = None
+                if agent_core.response_cache._semantic_enabled:
+                    emb = agent_core.response_cache._compute_embedding(query)
+                    if emb is not None:
+                        embedding = emb.tolist()
+                agent_core.response_cache.store(
+                    notebook_id=decision.notebook_id,
+                    query=query,
+                    answer=accumulated_response,
+                    thinking=previous_thinking or None,
+                    conversation_id=conversation_id,
+                    embedding=embedding,
+                )
 
         # Add response to trace BEFORE final yield (span still open)
         if tracing_settings and tracing_settings.response_max_length > 0:
@@ -281,9 +339,7 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
 
         # Final chunk
         final_chunk = ChatCompletionChunk(
-            id=chunk_id,
-            created=created,
-            model=request.model,
+            id=chunk_id, created=created, model=request.model,
             choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
             system_fingerprint=f"conv_{conversation_id}" if conversation_id else None,
         )
@@ -291,30 +347,96 @@ async def stream_smart_response(client, router: SmartRouter, decision, query: st
         yield "data: [DONE]\n\n"
 
 
-async def handle_smart_routing(request: ChatCompletionRequest, http_request: Request):
-    """Handle requests to the smart router model."""
-    routing_settings = get_routing_settings()
-    tracing_settings = get_tracing_settings()
+async def _handle_non_streaming(agent_core: AgentCore, decision: RoutingDecision, query: str,
+                                 request: ChatCompletionRequest, chat_id: str = None,
+                                 tracing_settings=None):
+    """Phase 3b: Non-streaming response (both NOTEBOOKLM and LLM_TASK)."""
     tracer = get_tracer(__name__)
 
-    client = await get_client()
+    with tracer.start_as_current_span("smart_router.handle_request") as span:
+        if tracing_settings and tracing_settings.request_max_length > 0:
+            span.set_attribute("user_query", query[:tracing_settings.request_max_length])
 
-    # Use shared notebook cache from app.state
-    if not app.state.notebook_cache:
-        await client.close()
-        raise HTTPException(
-            status_code=503,
-            detail="Notebook cache not initialized. Smart routing is not available."
+        if decision.request_type == "llm_task":
+            # LLM_TASK: invoke via LangChain ChatModel
+            from nlm_proxy.core.llm_client import _convert_messages
+            lc_messages = _convert_messages(
+                [{"role": m.role, "content": m.content} for m in request.messages]
+            )
+            result = await agent_core.chat_model.ainvoke(lc_messages)
+            response_text = result.content
+            response_source = "llm"
+        else:
+            # NOTEBOOKLM: query via agent_core
+            result = await agent_core.query(
+                notebook_id=decision.notebook_id,
+                query=query,
+                conversation_id=request.conversation_id,
+            )
+            response_text = result.get("answer", "") if result else ""
+            response_source = "notebooklm"
+
+            # Save conversation_id to session store
+            conv_id = result.get("conversation_id", "") if result else ""
+            if chat_id and conv_id and app.state.session_store:
+                app.state.session_store.set(chat_id, conv_id)
+                logger.info("session_saved: chat_id=%s, conversation_id=%s", chat_id, conv_id)
+            elif chat_id and not conv_id:
+                logger.info("session_not_saved: chat_id=%s, reason=no_conversation_id_from_nlm", chat_id)
+
+            # Store in response cache
+            if agent_core.response_cache and response_text and conv_id:
+                embedding = None
+                if agent_core.response_cache._semantic_enabled:
+                    emb = agent_core.response_cache._compute_embedding(query)
+                    if emb is not None:
+                        embedding = emb.tolist()
+                agent_core.response_cache.store(
+                    notebook_id=decision.notebook_id,
+                    query=query,
+                    answer=response_text,
+                    thinking=None,
+                    conversation_id=conv_id,
+                    embedding=embedding,
+                )
+
+        # Trace response
+        if tracing_settings and tracing_settings.response_max_length > 0:
+            add_span_attributes(
+                response_content=response_text[:tracing_settings.response_max_length],
+                response_source=response_source,
+            )
+
+        return ChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+            created=int(time.time()),
+            model=request.model,
+            choices=[ResponseChoice(
+                index=0,
+                message=ResponseMessage(
+                    role="assistant",
+                    content=response_text,
+                    reasoning_content=decision.reasoning,
+                ),
+                finish_reason="stop",
+            )],
+            usage=Usage(
+                prompt_tokens=len(query),
+                completion_tokens=len(response_text),
+                total_tokens=len(query) + len(response_text),
+            ),
+            system_fingerprint=f"conv_{request.conversation_id}" if request.conversation_id else None,
         )
 
-    router = SmartRouter(
-        nlm_client=client,
-        notebook_cache=app.state.notebook_cache,
-        llm_base_url=routing_settings.llm_base_url,
-        llm_api_key=routing_settings.llm_api_key,
-        llm_model=routing_settings.llm_model,
-        allowed_notebooks=routing_settings.allowed_notebooks
-    )
+
+async def handle_smart_routing(request: ChatCompletionRequest, http_request: Request):
+    """Handle requests to the smart router model — four-phase pipeline."""
+    routing_settings = get_routing_settings()
+    tracing_settings = get_tracing_settings()
+    agent_core: AgentCore = app.state.agent_core
+
+    if not agent_core:
+        raise HTTPException(status_code=503, detail="Agent core not initialized.")
 
     # Extract chat_id from headers or request metadata
     chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
@@ -324,340 +446,91 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
         if chat_id:
             chat_id_source = "metadata"
 
-    # Extract allowed_notebooks from request metadata for per-request ACL filtering
+    # Extract allowed_notebooks from request metadata (per-request ACL)
     request_allowed_notebooks = None
     if hasattr(request, 'metadata') and request.metadata:
-        allowed_notebooks_raw = request.metadata.get("allowed_notebooks")
-        if allowed_notebooks_raw is not None:
-            # Handle wildcard: ["*"] means all notebooks (same as None)
-            if allowed_notebooks_raw == ["*"]:
+        raw = request.metadata.get("allowed_notebooks")
+        if raw is not None:
+            if raw == ["*"]:
                 request_allowed_notebooks = None
                 logger.debug("[SMART-ROUTER] ACL wildcard ['*'] - all notebooks allowed")
-            # Empty list means no notebooks allowed (will be rejected by router)
-            elif allowed_notebooks_raw == []:
+            elif raw == []:
                 request_allowed_notebooks = []
                 logger.debug("[SMART-ROUTER] ACL empty list [] - no notebooks allowed")
-            # Specific list of notebook IDs
             else:
-                request_allowed_notebooks = allowed_notebooks_raw
-                logger.debug(f"[SMART-ROUTER] ACL filter: {len(request_allowed_notebooks)} allowed notebooks")
+                request_allowed_notebooks = raw
+                logger.debug("[SMART-ROUTER] ACL filter: %d allowed notebooks", len(raw))
         else:
             logger.debug("[SMART-ROUTER] No ACL metadata - all notebooks allowed")
     else:
         logger.debug("[SMART-ROUTER] No metadata - all notebooks allowed")
 
-    # Load existing conversation_id from session store if chat_id exists
+    # Load conversation_id from session store
+    conversation_id = None
     if chat_id and app.state.session_store:
         stored_conv_id = app.state.session_store.get(chat_id)
         if stored_conv_id:
-            logger.info(f"session_lookup: chat_id={chat_id}, conversation_id={stored_conv_id}, source={chat_id_source}")
+            logger.info("session_lookup: chat_id=%s, conversation_id=%s, source=%s", chat_id, stored_conv_id, chat_id_source)
             request.conversation_id = stored_conv_id
+            conversation_id = stored_conv_id
         else:
-            logger.info(f"session_lookup: chat_id={chat_id}, conversation_id=None, source={chat_id_source}")
+            logger.info("session_lookup: chat_id=%s, conversation_id=None, source=%s", chat_id, chat_id_source)
 
-    # First-turn detection for cache check
-    is_first_turn = request.conversation_id is None
+    user_messages = [m for m in request.messages if m.role == "user"]
+    if not user_messages:
+        raise HTTPException(status_code=400, detail="No user message found")
+    query = user_messages[-1].content
 
-    # For streaming requests, the generator owns the span (so it lives for full duration)
-    # For non-streaming, we create the span here
-    if request.stream:
-        try:
-            user_messages = [m for m in request.messages if m.role == "user"]
-            if not user_messages:
-                await router.close()
-                await client.close()
-                raise HTTPException(status_code=400, detail="No user message found")
+    # Build RequestOptions
+    options = RequestOptions(
+        bypass_cache=request.bypass_cache,
+        include_thinking=request.include_thinking,
+        allowed_notebooks=request_allowed_notebooks,
+        conversation_id=conversation_id,
+        chat_id=chat_id,
+    )
 
-            query = user_messages[-1].content
+    # Phase 0+1: Route (includes pre-routing cache check)
+    decision = await agent_core.route(query, options)
 
-            # Phase 1: Pre-routing global L1 check (instant, skips routing)
-            if not request.bypass_cache and app.state.response_cache:
-                cache_result, hit_type = app.state.response_cache.lookup_global(query)
-                if cache_result:
-                    cached_notebook_id = cache_result.notebook_id
-                    # ACL check: is the cached notebook accessible?
-                    if request_allowed_notebooks is None or cached_notebook_id in request_allowed_notebooks:
-                        logger.info(
-                            "[CACHE] Pre-routing L1 HIT: query='%s', notebook=%s (skipped routing)",
-                            query[:80], cached_notebook_id[:12],
-                        )
-                        await router.close()
-                        await client.close()
-
-                        async def _stream_pre_routing_cached():
-                            chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-                            created = int(time.time())
-                            reasoning = "Pre-routing cache hit \u2014 returning cached response (skipped routing)."
-                            reasoning_chunk = ChatCompletionChunk(
-                                id=chunk_id, created=created, model=request.model,
-                                choices=[Choice(delta=DeltaContent(reasoning_content=reasoning + "\n\n"))],
-                            )
-                            yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
-                            if cache_result.thinking and request.include_thinking:
-                                thinking_chunk = ChatCompletionChunk(
-                                    id=chunk_id, created=created, model=request.model,
-                                    choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
-                                    system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                                )
-                                yield f"data: {thinking_chunk.model_dump_json()}\n\n"
-                            answer_chunk = ChatCompletionChunk(
-                                id=chunk_id, created=created, model=request.model,
-                                choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
-                                system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                            )
-                            yield f"data: {answer_chunk.model_dump_json()}\n\n"
-                            final_chunk = ChatCompletionChunk(
-                                id=chunk_id, created=created, model=request.model,
-                                choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
-                                system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                            )
-                            yield f"data: {final_chunk.model_dump_json()}\n\n"
-                            yield "data: [DONE]\n\n"
-
-                        return StreamingResponse(
-                            _stream_pre_routing_cached(),
-                            media_type="text/event-stream",
-                            headers={"X-Cache-Status": f"HIT_PRE_ROUTING_{hit_type.upper()}"},
-                        )
-                    else:
-                        logger.debug(
-                            "[CACHE] Pre-routing L1 HIT but notebook %s not in allowed list, falling through",
-                            cached_notebook_id[:12],
-                        )
-
-            # Phase 2: Route normally (only reached on Phase 1 miss)
-            decision = await router.route(query, allowed_notebooks=request_allowed_notebooks)
-
-            logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
-
-            # Cache check after routing (knowledge queries only)
-            if not request.bypass_cache and app.state.response_cache and decision.request_type == RequestType.NOTEBOOKLM:
-                logger.debug(
-                    "[CACHE] Checking cache: query='%s', notebook=%s, is_first_turn=%s",
-                    query[:80], decision.notebook_id[:12], is_first_turn,
-                )
-                cache_result, hit_type = await app.state.response_cache.lookup_async(decision.notebook_id, query)
-                if cache_result:
-                    async def stream_cached_smart(cache_result, hit_type, reasoning="Cache hit — returning cached response."):
-                        chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-                        created = int(time.time())
-                        # Reasoning chunk
-                        reasoning_chunk = ChatCompletionChunk(
-                            id=chunk_id, created=created, model=request.model,
-                            choices=[Choice(delta=DeltaContent(reasoning_content=reasoning + "\n\n"))],
-                        )
-                        yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
-                        # Thinking chunk (if available)
-                        if cache_result.thinking and request.include_thinking:
-                            thinking_chunk = ChatCompletionChunk(
-                                id=chunk_id, created=created, model=request.model,
-                                choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
-                                system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                            )
-                            yield f"data: {thinking_chunk.model_dump_json()}\n\n"
-                        # Answer chunk
-                        answer_chunk = ChatCompletionChunk(
-                            id=chunk_id, created=created, model=request.model,
-                            choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
-                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                        )
-                        yield f"data: {answer_chunk.model_dump_json()}\n\n"
-                        # Final chunk
-                        final_chunk = ChatCompletionChunk(
-                            id=chunk_id, created=created, model=request.model,
-                            choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
-                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                        )
-                        yield f"data: {final_chunk.model_dump_json()}\n\n"
-                        yield "data: [DONE]\n\n"
-                    await router.close()
-                    await client.close()
-                    return StreamingResponse(
-                        stream_cached_smart(cache_result, hit_type),
-                        media_type="text/event-stream",
-                        headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
-                    )
-
-            # Streaming: generator creates its own span to capture response
+    # Phase 0 hit → return cached response
+    if decision.cache_result:
+        if request.stream:
             return StreamingResponse(
-                stream_smart_response(client, router, decision, query, request, chat_id, tracing_settings, is_first_turn),
-                media_type="text/event-stream"
+                _stream_cached_response(decision, request),
+                media_type="text/event-stream",
+                headers={"X-Cache-Status": f"HIT_{decision.cache_hit_type.upper()}"},
             )
-        except Exception:
-            await router.close()
-            await client.close()
-            raise
+        else:
+            return _json_cached_response(decision, request)
 
-    # Non-streaming path: create span here
-    with tracer.start_as_current_span("smart_router.handle_request") as span:
-        try:
-            user_messages = [m for m in request.messages if m.role == "user"]
-            if not user_messages:
-                raise HTTPException(status_code=400, detail="No user message found")
+    logger.info("[SMART-ROUTER] Decision: %s, notebook=%s", decision.request_type, decision.notebook_id)
 
-            query = user_messages[-1].content
-
-            # Add user_query to span (using configurable max length)
-            if tracing_settings.request_max_length > 0:
-                add_span_attributes(user_query=query[:tracing_settings.request_max_length])
-
-            # Phase 1: Pre-routing global L1 check (instant, skips routing)
-            if not request.bypass_cache and app.state.response_cache:
-                cache_result, hit_type = app.state.response_cache.lookup_global(query)
-                if cache_result:
-                    cached_notebook_id = cache_result.notebook_id
-                    # ACL check: is the cached notebook accessible?
-                    if request_allowed_notebooks is None or cached_notebook_id in request_allowed_notebooks:
-                        logger.info(
-                            "[CACHE] Pre-routing L1 HIT (non-stream): query='%s', notebook=%s (skipped routing)",
-                            query[:80], cached_notebook_id[:12],
-                        )
-                        from fastapi.responses import JSONResponse
-                        resp = ChatCompletionResponse(
-                            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                            created=int(time.time()),
-                            model=request.model,
-                            choices=[ResponseChoice(
-                                index=0,
-                                message=ResponseMessage(
-                                    role="assistant",
-                                    content=cache_result.answer,
-                                    reasoning_content="Pre-routing cache hit \u2014 returning cached response (skipped routing).",
-                                ),
-                                finish_reason="stop"
-                            )],
-                            usage=Usage(
-                                prompt_tokens=len(query),
-                                completion_tokens=len(cache_result.answer),
-                                total_tokens=len(query) + len(cache_result.answer),
-                            ),
-                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                        )
-                        return JSONResponse(
-                            content=resp.model_dump(),
-                            headers={"X-Cache-Status": f"HIT_PRE_ROUTING_{hit_type.upper()}"},
-                        )
-                    else:
-                        logger.debug(
-                            "[CACHE] Pre-routing L1 HIT but notebook %s not in allowed list, falling through",
-                            cached_notebook_id[:12],
-                        )
-
-            # Phase 2: Route normally (only reached on Phase 1 miss)
-            decision = await router.route(query, allowed_notebooks=request_allowed_notebooks)
-
-            logger.info(f"[SMART-ROUTER] Decision: {decision.request_type.value}, notebook={decision.notebook_id}")
-
-            if decision.request_type == RequestType.LLM_TASK:
-                # Call external LLM
-                response_text = await router.llm_client.complete(
-                    query,
-                    max_tokens=4096
+    # Phase 2: Post-routing cache check (notebook-scoped, NOTEBOOKLM only)
+    if decision.request_type == "notebooklm" and not options.bypass_cache and agent_core.response_cache:
+        cache_result, hit_type = await agent_core.response_cache.lookup_async(
+            decision.notebook_id, query
+        )
+        if cache_result:
+            decision.cache_result = cache_result
+            decision.cache_hit_type = hit_type
+            if request.stream:
+                return StreamingResponse(
+                    _stream_cached_response(decision, request),
+                    media_type="text/event-stream",
+                    headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
                 )
-                response_source = "llm"
             else:
-                # Cache check before NLM query (non-streaming)
-                if not request.bypass_cache and app.state.response_cache:
-                    logger.debug(
-                        "[CACHE] Checking cache: query='%s', notebook=%s, is_first_turn=%s",
-                        query[:80], decision.notebook_id[:12], is_first_turn,
-                    )
-                    cache_result, hit_type = await app.state.response_cache.lookup_async(decision.notebook_id, query)
-                    if cache_result:
-                        from fastapi.responses import JSONResponse
-                        resp = ChatCompletionResponse(
-                            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                            created=int(time.time()),
-                            model=request.model,
-                            choices=[ResponseChoice(
-                                index=0,
-                                message=ResponseMessage(
-                                    role="assistant",
-                                    content=cache_result.answer,
-                                    reasoning_content=decision.reasoning,
-                                ),
-                                finish_reason="stop"
-                            )],
-                            usage=Usage(
-                                prompt_tokens=len(query),
-                                completion_tokens=len(cache_result.answer),
-                                total_tokens=len(query) + len(cache_result.answer),
-                            ),
-                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                        )
-                        return JSONResponse(
-                            content=resp.model_dump(),
-                            headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
-                        )
+                return _json_cached_response(decision, request)
 
-                # Call NotebookLM with conversation_id for continuity
-                result = await client.query(
-                    notebook_id=decision.notebook_id,
-                    query_text=query,
-                    conversation_id=request.conversation_id
-                )
-                response_text = result.get("answer", "") if result else ""
-                response_source = "notebooklm"
-
-                # Save conversation_id to session store if we have a chat_id
-                conv_id = result.get("conversation_id", "") if result else ""
-                if chat_id and conv_id and app.state.session_store:
-                    app.state.session_store.set(chat_id, conv_id)
-                    logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conv_id}")
-                elif chat_id and not conv_id:
-                    logger.info(f"session_not_saved: chat_id={chat_id}, reason=no_conversation_id_from_nlm")
-
-                # Store in response cache (with embedding)
-                # Note: all turns are cached because client rewrites follow-ups into standalone questions
-                if app.state.response_cache and response_text and conv_id:
-                    logger.debug(
-                        "[CACHE] Storing response: query='%s', notebook=%s, is_first_turn=%s",
-                        query[:80], decision.notebook_id[:12], is_first_turn,
-                    )
-                    embedding = None
-                    if app.state.response_cache._semantic_enabled:
-                        emb = app.state.response_cache._compute_embedding(query)
-                        if emb is not None:
-                            embedding = emb.tolist()
-                    app.state.response_cache.store(
-                        notebook_id=decision.notebook_id,
-                        query=query,
-                        answer=response_text,
-                        thinking=None,
-                        conversation_id=conv_id,
-                        embedding=embedding,
-                    )
-
-            # Add response to trace
-            if tracing_settings.response_max_length > 0:
-                add_span_attributes(
-                    response_content=response_text[:tracing_settings.response_max_length],
-                    response_source=response_source
-                )
-
-            return ChatCompletionResponse(
-                id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                created=int(time.time()),
-                model=request.model,
-                choices=[ResponseChoice(
-                    index=0,
-                    message=ResponseMessage(
-                        role="assistant",
-                        content=response_text,
-                        reasoning_content=decision.reasoning
-                    ),
-                    finish_reason="stop"
-                )],
-                usage=Usage(
-                    prompt_tokens=len(query),
-                    completion_tokens=len(response_text),
-                    total_tokens=len(query) + len(response_text)
-                ),
-                system_fingerprint=f"conv_{request.conversation_id}" if request.conversation_id else None,
-            )
-        finally:
-            await router.close()
-            await client.close()
+    # Phase 3: Execute query (streaming or non-streaming)
+    if request.stream:
+        return StreamingResponse(
+            stream_smart_response(agent_core, decision, query, request, chat_id, tracing_settings),
+            media_type="text/event-stream",
+        )
+    else:
+        return await _handle_non_streaming(agent_core, decision, query, request, chat_id, tracing_settings)
 
 
 async def stream_response(client, notebook_id: str, query_text: str, request: ChatCompletionRequest, chat_id: str = None, is_first_turn: bool = False):
