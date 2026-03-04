@@ -252,6 +252,7 @@ async def test_session_not_saved_logged_when_no_conv_id(caplog):
     from nlm_proxy.openai.server import chat_completions, app
 
     app.state.session_store = SessionStore(ttl_seconds=3600)
+    app.state.agent_core = None  # Reset — this test uses direct notebook path
 
     mock_client = AsyncMock()
     mock_client.query = AsyncMock(return_value={

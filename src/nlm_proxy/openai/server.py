@@ -646,6 +646,9 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     if request.model == routing_settings.router_model_name:
         return await handle_smart_routing(request, http_request)
 
+    # --- Direct notebook path (model == notebook_id) ---
+    agent_core: AgentCore | None = app.state.agent_core
+
     # Extract chat_id from headers or request metadata
     chat_id = http_request.headers.get("X-OpenWebUI-Chat-Id")
     chat_id_source = "header" if chat_id else None
@@ -679,149 +682,168 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     query_text = user_messages[-1].content
     logger.debug(f"[PROXY] Extracted query: {query_text[:500]}{'...' if len(query_text) > 500 else ''}")
 
-    # First-turn cache check (only when no existing conversation)
+    # First-turn detection
     is_first_turn = request.conversation_id is None
     if chat_id and app.state.session_store:
         stored_conv_id = app.state.session_store.get(chat_id)
         if stored_conv_id:
             is_first_turn = False
 
-    if not request.bypass_cache and app.state.response_cache:
-        cache_result, hit_type = await app.state.response_cache.lookup_async(request.model, query_text)
-        if cache_result:
-            if request.stream:
-                # Streaming cache HIT: yield cached answer as SSE chunks
-                async def stream_cached_response(cache_result, hit_type):
-                    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-                    created = int(time.time())
-                    # Thinking chunk (if available)
-                    if cache_result.thinking and request.include_thinking:
-                        thinking_chunk = ChatCompletionChunk(
-                            id=chunk_id, created=created, model=request.model,
-                            choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
-                            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                        )
-                        yield f"data: {thinking_chunk.model_dump_json()}\n\n"
-                    # Answer chunk
-                    answer_chunk = ChatCompletionChunk(
+    # Cache check via AgentCore.handle_direct_query() (unified path)
+    options = RequestOptions(
+        bypass_cache=request.bypass_cache,
+        conversation_id=request.conversation_id,
+    )
+    if agent_core:
+        cache_result, hit_type = await agent_core.handle_direct_query(
+            request.model, query_text, options
+        )
+    else:
+        cache_result, hit_type = None, None
+
+    if cache_result:
+        if request.stream:
+            # Streaming cache HIT: yield cached answer as SSE chunks
+            async def stream_cached_response(cache_result, hit_type):
+                chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+                created = int(time.time())
+                # Thinking chunk (if available)
+                if cache_result.thinking and request.include_thinking:
+                    thinking_chunk = ChatCompletionChunk(
                         id=chunk_id, created=created, model=request.model,
-                        choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
+                        choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
                         system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
                     )
-                    yield f"data: {answer_chunk.model_dump_json()}\n\n"
-                    # Final chunk
-                    final_chunk = ChatCompletionChunk(
-                        id=chunk_id, created=created, model=request.model,
-                        choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
-                        system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-                    )
-                    yield f"data: {final_chunk.model_dump_json()}\n\n"
-                    yield "data: [DONE]\n\n"
-                return StreamingResponse(
-                    stream_cached_response(cache_result, hit_type),
-                    media_type="text/event-stream",
-                    headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
-                )
-            else:
-                # Non-streaming cache HIT
-                response = ChatCompletionResponse(
-                    id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                    created=int(time.time()),
-                    model=request.model,
-                    choices=[ResponseChoice(
-                        index=0,
-                        message=ResponseMessage(role="assistant", content=cache_result.answer),
-                        finish_reason="stop"
-                    )],
-                    usage=Usage(
-                        prompt_tokens=len(query_text),
-                        completion_tokens=len(cache_result.answer),
-                        total_tokens=len(query_text) + len(cache_result.answer),
-                    ),
+                    yield f"data: {thinking_chunk.model_dump_json()}\n\n"
+                # Answer chunk
+                answer_chunk = ChatCompletionChunk(
+                    id=chunk_id, created=created, model=request.model,
+                    choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
                     system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
                 )
-                from fastapi.responses import JSONResponse
-                return JSONResponse(
-                    content=response.model_dump(),
-                    headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
+                yield f"data: {answer_chunk.model_dump_json()}\n\n"
+                # Final chunk
+                final_chunk = ChatCompletionChunk(
+                    id=chunk_id, created=created, model=request.model,
+                    choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
+                    system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
                 )
+                yield f"data: {final_chunk.model_dump_json()}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(
+                stream_cached_response(cache_result, hit_type),
+                media_type="text/event-stream",
+                headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
+            )
+        else:
+            # Non-streaming cache HIT
+            response = ChatCompletionResponse(
+                id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                created=int(time.time()),
+                model=request.model,
+                choices=[ResponseChoice(
+                    index=0,
+                    message=ResponseMessage(role="assistant", content=cache_result.answer),
+                    finish_reason="stop"
+                )],
+                usage=Usage(
+                    prompt_tokens=len(query_text),
+                    completion_tokens=len(cache_result.answer),
+                    total_tokens=len(query_text) + len(cache_result.answer),
+                ),
+                system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+            )
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                content=response.model_dump(),
+                headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
+            )
 
-    client = await get_client()
+    # --- Cache miss: query NotebookLM ---
 
     if request.stream:
         logger.debug("[PROXY] Using streaming response")
+        client = await get_client()
         return StreamingResponse(
             stream_response(client, request.model, query_text, request, chat_id, is_first_turn),
             media_type="text/event-stream"
         )
 
-    # Non-streaming path
+    # Non-streaming path — use AgentCore if available, else fallback to direct client
     logger.debug("[PROXY] Using non-streaming response")
-    try:
-        logger.debug(f"[NOTEBOOKLM] Calling query: notebook_id={request.model}, query={query_text[:100]}..., conversation_id={request.conversation_id}")
-        result = await client.query(
+    logger.debug(f"[NOTEBOOKLM] Calling query: notebook_id={request.model}, query={query_text[:100]}..., conversation_id={request.conversation_id}")
+
+    if agent_core:
+        result = await agent_core.query(
             notebook_id=request.model,
-            query_text=query_text,
+            query=query_text,
             conversation_id=request.conversation_id,
         )
+    else:
+        client = await get_client()
+        try:
+            result = await client.query(
+                notebook_id=request.model,
+                query_text=query_text,
+                conversation_id=request.conversation_id,
+            )
+        finally:
+            await client.close()
 
-        answer = result.get("answer", "") if result else ""
-        conv_id = result.get("conversation_id", "") if result else ""
+    answer = result.get("answer", "") if result else ""
+    conv_id = result.get("conversation_id", "") if result else ""
 
-        # Save conversation_id to session store if we have a chat_id
-        if chat_id and conv_id and app.state.session_store:
-            app.state.session_store.set(chat_id, conv_id)
-            logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conv_id}")
-        elif chat_id and not conv_id:
-            logger.info(f"session_not_saved: chat_id={chat_id}, reason=no_conversation_id_from_nlm")
+    # Save conversation_id to session store if we have a chat_id
+    if chat_id and conv_id and app.state.session_store:
+        app.state.session_store.set(chat_id, conv_id)
+        logger.info(f"session_saved: chat_id={chat_id}, conversation_id={conv_id}")
+    elif chat_id and not conv_id:
+        logger.info(f"session_not_saved: chat_id={chat_id}, reason=no_conversation_id_from_nlm")
 
-        logger.debug(f"[NOTEBOOKLM] Response received: answer_len={len(answer)}, conversation_id={conv_id}")
-        logger.debug(f"[NOTEBOOKLM] Answer preview: {answer[:200]}{'...' if len(answer) > 200 else ''}")
+    logger.debug(f"[NOTEBOOKLM] Response received: answer_len={len(answer)}, conversation_id={conv_id}")
+    logger.debug(f"[NOTEBOOKLM] Answer preview: {answer[:200]}{'...' if len(answer) > 200 else ''}")
 
-        # Handle empty responses gracefully
-        if not answer or not answer.strip():
-            logger.warning(f"[NOTEBOOKLM] Empty answer received for query: {query_text[:100]}...")
-            # Return a helpful error message instead of empty content
-            answer = "I apologize, but I couldn't generate a response for that query. This might happen when the question doesn't relate to the notebook content or uses unsupported formatting. Please try rephrasing your question."
+    # Handle empty responses gracefully
+    if not answer or not answer.strip():
+        logger.warning(f"[NOTEBOOKLM] Empty answer received for query: {query_text[:100]}...")
+        answer = "I apologize, but I couldn't generate a response for that query. This might happen when the question doesn't relate to the notebook content or uses unsupported formatting. Please try rephrasing your question."
 
-        response = ChatCompletionResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-            created=int(time.time()),
-            model=request.model,
-            choices=[ResponseChoice(
-                index=0,
-                message=ResponseMessage(role="assistant", content=answer),
-                finish_reason="stop"
-            )],
-            usage=Usage(prompt_tokens=len(query_text), completion_tokens=len(answer), total_tokens=len(query_text) + len(answer)),
-            system_fingerprint=f"conv_{conv_id}" if conv_id else None
+    response = ChatCompletionResponse(
+        id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        created=int(time.time()),
+        model=request.model,
+        choices=[ResponseChoice(
+            index=0,
+            message=ResponseMessage(role="assistant", content=answer),
+            finish_reason="stop"
+        )],
+        usage=Usage(prompt_tokens=len(query_text), completion_tokens=len(answer), total_tokens=len(query_text) + len(answer)),
+        system_fingerprint=f"conv_{conv_id}" if conv_id else None
+    )
+
+    # Store in response cache (with embedding)
+    response_cache = agent_core.response_cache if agent_core else app.state.response_cache
+    if response_cache and answer and conv_id:
+        logger.debug(
+            "[CACHE] Storing response: query='%s', notebook=%s, is_first_turn=%s",
+            query_text[:80], request.model[:12], is_first_turn,
+        )
+        embedding = None
+        if response_cache._semantic_enabled:
+            emb = response_cache._compute_embedding(query_text)
+            if emb is not None:
+                embedding = emb.tolist()
+        response_cache.store(
+            notebook_id=request.model,
+            query=query_text,
+            answer=answer,
+            thinking=None,
+            conversation_id=conv_id,
+            embedding=embedding,
         )
 
-        # Store in response cache (with embedding)
-        # Note: all turns are cached because client rewrites follow-ups into standalone questions
-        if app.state.response_cache and answer and conv_id:
-            logger.debug(
-                "[CACHE] Storing response: query='%s', notebook=%s, is_first_turn=%s",
-                query_text[:80], request.model[:12], is_first_turn,
-            )
-            embedding = None
-            if app.state.response_cache._semantic_enabled:
-                emb = app.state.response_cache._compute_embedding(query_text)
-                if emb is not None:
-                    embedding = emb.tolist()
-            app.state.response_cache.store(
-                notebook_id=request.model,
-                query=query_text,
-                answer=answer,
-                thinking=None,
-                conversation_id=conv_id,
-                embedding=embedding,
-            )
-
-        logger.debug(f"[PROXY] Returning response with {len(answer)} characters")
-        return response
-    finally:
-        await client.close()
+    logger.debug(f"[PROXY] Returning response with {len(answer)} characters")
+    return response
 
 
 @app.post("/v1/embeddings", dependencies=[Depends(verify_api_key)])
