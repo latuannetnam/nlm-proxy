@@ -268,7 +268,7 @@ class CacheSettings(BaseSettings):
     )
     embedding_model: str = Field(
         default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        description="fastembed model for L2 embedding pre-filter",
+        description="Embedding model for L2 semantic pre-filter",
     )
     similarity_threshold: float = Field(
         default=0.5, description="Min cosine similarity for L2 pre-filter"

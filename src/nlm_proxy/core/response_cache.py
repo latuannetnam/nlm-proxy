@@ -1,7 +1,7 @@
 """Response cache with three-layer lookup.
 
 Layer 1: Exact hash match (0ms) — always active
-Layer 2: Embedding pre-filter via fastembed + NumPy (~10-30ms) — smart routing only
+Layer 2: Embedding pre-filter via LangChain HuggingFace + NumPy (~10-30ms) — smart routing only
 Layer 3: LLM semantic verification (~1-2s) — smart routing only
 
 Cache is global across all users, keyed by (notebook_id, normalized_query).
@@ -39,7 +39,7 @@ class ResponseCache:
     """Three-layer response cache with LRU + TTL.
 
     Layer 1: exact hash match (synchronous)
-    Layer 2: embedding similarity pre-filter (requires fastembed)
+    Layer 2: embedding similarity pre-filter (requires langchain-huggingface)
     Layer 3: LLM semantic verification (async, requires llm_client)
     """
 
@@ -562,12 +562,14 @@ class ResponseCache:
             return result
 
     def _load_embedding_model(self) -> None:
-        """Load the fastembed embedding model."""
+        """Load the LangChain HuggingFace embedding model."""
         try:
-            from fastembed import TextEmbedding
-            self._embedding_model_instance = TextEmbedding(
-                self._embedding_model_name
+            from langchain_huggingface import HuggingFaceEmbeddings
+            import numpy as np
+            self._embedding_model_instance = HuggingFaceEmbeddings(
+                model_name=self._embedding_model_name
             )
+            self._np = np
             logger.info(
                 "[CACHE] Embedding model loaded: %s",
                 self._embedding_model_name,
@@ -577,24 +579,20 @@ class ResponseCache:
             self._semantic_enabled = False
 
     def _compute_embedding(self, query: str) -> object | None:
-        """Compute query embedding using fastembed model.
+        """Compute query embedding using LangChain HuggingFace model.
 
         Returns numpy array or None if embedding model is not available.
         """
         if self._embedding_model_instance is None:
             return None
 
-        import numpy as np
         try:
-            embeddings = list(
-                self._embedding_model_instance.embed([query])
-            )
-            if embeddings:
-                emb = np.array(embeddings[0], dtype=np.float32)
-                norm = np.linalg.norm(emb)
-                if norm > 0:
-                    emb /= norm
-                return emb
+            embedding = self._embedding_model_instance.embed_query(query)
+            vec = self._np.array(embedding)
+            norm = self._np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            return vec
         except Exception:
             logger.exception("[CACHE] Failed to compute embedding")
         return None

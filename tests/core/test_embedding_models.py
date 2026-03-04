@@ -2,10 +2,10 @@
 
 import pytest
 
-# Skip all tests if fastembed is not installed
-fastembed = pytest.importorskip("fastembed")
+# Skip if sentence-transformers not installed
+st = pytest.importorskip("sentence_transformers")
 
-from fastembed import TextEmbedding
+from langchain_huggingface import HuggingFaceEmbeddings
 import numpy as np
 import time
 
@@ -17,12 +17,12 @@ MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 @pytest.fixture(scope="module")
 def model():
     """Load embedding model once for all tests."""
-    return TextEmbedding(MODEL_NAME)
+    return HuggingFaceEmbeddings(model_name=MODEL_NAME)
 
 
-def cosine_sim(model: TextEmbedding, text_a: str, text_b: str) -> float:
+def cosine_sim(model: HuggingFaceEmbeddings, text_a: str, text_b: str) -> float:
     """Compute cosine similarity between two texts."""
-    embeddings = list(model.embed([text_a, text_b]))
+    embeddings = model.embed_documents([text_a, text_b])
     a, b = np.array(embeddings[0]), np.array(embeddings[1])
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
@@ -85,7 +85,7 @@ class TestPerformance:
     def test_single_query_latency(self, model):
         text = "Chính sách nhân sự của công ty là gì?"
         start = time.perf_counter()
-        list(model.embed([text]))
+        model.embed_query(text)
         elapsed_ms = (time.perf_counter() - start) * 1000
         # Design target: <50ms. CI tolerance: <200ms.
         assert elapsed_ms < 200, f"Single query latency: {elapsed_ms:.1f}ms, expected <200ms"
@@ -93,7 +93,7 @@ class TestPerformance:
     def test_batch_latency(self, model):
         texts = [f"Query number {i} about company policy" for i in range(10)]
         start = time.perf_counter()
-        list(model.embed(texts))
+        model.embed_documents(texts)
         elapsed_ms = (time.perf_counter() - start) * 1000
         per_query = elapsed_ms / len(texts)
         assert per_query < 100, f"Batch per-query: {per_query:.1f}ms, expected <100ms"
