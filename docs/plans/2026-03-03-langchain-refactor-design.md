@@ -346,6 +346,17 @@ graph.add_edge("resolve_cross_notebook", END)
 **Effort**: 🟡 Medium — define tool schemas, wire to client, ~2 days
 **Files changed**: New `core/tools.py` or `openai/tools.py`
 
+> [!NOTE]
+> #### Implementation Note (2026-03-04) — Deferred
+>
+> Tool-calling agent is **deferred indefinitely**. Rationale:
+> - The current classify → select pipeline handles 95% of real-world proxy queries
+> - MCP server already exposes these methods as tools — MCP clients (Claude, Cursor) can orchestrate directly
+> - Agent tool-calling adds latency (multiple LLM round-trips) and cost, conflicting with the proxy's goal of being lightweight
+> - OpenAI API clients expect predictable single-turn responses, not autonomous multi-step reasoning
+>
+> Can be revisited as an **opt-in agent mode** if demand arises.
+
 ---
 
 ### 7. Cross-Notebook Query Support
