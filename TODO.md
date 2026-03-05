@@ -1,7 +1,7 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress 
-- [] Test and verify response cache efficiency carefully
+- [] Refactor Response Cache to 2-layer (L1 + L2) to increase precision: docs\plans\2026-03-05-drop-l3-cache-design.md
 - [] Endpoint & script to clear response cache without restart proxy
 - [] Monitor Response cache performance metrics  via Otel
 - [] Integrate tracing with Langsmith, Phonenix
