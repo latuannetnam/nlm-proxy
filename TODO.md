@@ -1,6 +1,7 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress 
+- [] Test and verify response cache efficiency carefully
 - [] Endpoint & script to clear response cache without restart proxy
 - [] Monitor Response cache performance metrics  via Otel
 - [] Integrate tracing with Langsmith, Phonenix

@@ -988,7 +988,6 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
         try:
             llm_client = None
             if cache_settings.semantic_match_enabled and routing_settings.llm_api_key:
-                from nlm_proxy.core.llm_client import LangChainLLMClient, create_chat_model
                 chat_model = create_chat_model(
                     model=routing_settings.llm_model,
                     base_url=routing_settings.llm_base_url,
