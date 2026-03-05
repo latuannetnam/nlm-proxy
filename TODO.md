@@ -1,7 +1,6 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress 
-- [] Refactor Response Cache to 2-layer (L1 + L2) to increase precision: docs\plans\2026-03-05-drop-l3-cache-design.md
 - [] Endpoint & script to clear response cache without restart proxy
 - [] Monitor Response cache performance metrics  via Otel
 - [] Integrate tracing with Langsmith, Phonenix
@@ -33,3 +32,4 @@
 - [x] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks: Memory management, Response caching, Cross-notebook query support: docs\plans\2026-03-03-langchain-refactor-design.md
 - [x] Fix all failed, skipped tests
 - [x] verify Otel tracing work with new refactor
+- [x] Refactor Response Cache to 2-layer (L1 + L2) to increase precision: docs\plans\2026-03-05-drop-l3-cache-design.md
