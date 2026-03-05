@@ -1,6 +1,6 @@
 # NLM Proxy
 
-**NotebookLM client library** with MCP server and OpenAI-compatible proxy for **NotebookLM** (notebooklm.google.com).
+**NotebookLM client library** with MCP server and OpenAI-compatible proxy for **NotebookLM** (notebooklm.google.com). Features smart routing powered by **LangChain/LangGraph** with an **AgentCore** orchestration layer shared by both OpenAI proxy and MCP server.
 
 > This project is a fork of [notebooklm-mcp](https://github.com/jacob-bd/notebooklm-mcp) with significant enhancements, including an OpenAI-compatible API proxy and modular architecture.
 
@@ -62,6 +62,8 @@ Automatically route requests to the best backend using AI-powered classification
 | **Source-Level Routing** | Routes based on specific document names, URLs, and source types |
 | **LLM Passthrough** | General tasks routed to external LLM (e.g., GPT-4o-mini) |
 | **Cached Summaries** | Notebook and source info cached with configurable TTL |
+| **Multi-Provider** | Supports OpenAI, Anthropic, Ollama via LangChain |
+| **Fallback on Error** | Gracefully degrades to first notebook if routing fails |
 
 ### OpenTelemetry Tracing
 Monitor and analyze routing decisions with distributed tracing:
@@ -85,8 +87,10 @@ For advanced configuration, querying, and troubleshooting, see the [Tracing Guid
 # Add to ~/.nlm-proxy/.env
 NLM_PROXY_ROUTING_LLM_API_KEY=sk-your-openai-key
 NLM_PROXY_ROUTING_LLM_MODEL=gpt-4o-mini
-NLM_PROXY_ROUTING_SOURCE_FETCH_CONCURRENCY=10  # parallel source fetches
-NLM_PROXY_ROUTING_MAX_SOURCE_TITLES=15         # titles in selection prompt
+
+# Agent settings (LangChain/LangGraph)
+NLM_PROXY_AGENT_LLM_PROVIDER=openai              # openai | anthropic | ollama
+NLM_PROXY_AGENT_FALLBACK_ON_ERROR=true            # fall back to first notebook on error
 ```
 
 **Usage:**
@@ -113,7 +117,7 @@ Four-layer cache that eliminates 40-50s latency for repeated and semantically si
 |-------|--------|-------|
 | **Pre-routing L1** | Global query hash (skips routing entirely) | Instant |
 | **Exact Match** | Hash-based lookup with LRU eviction and TTL | Instant |
-| **Embedding Pre-filter** | Multilingual vector similarity (fastembed MiniLM) | ~10ms |
+| **Embedding Pre-filter** | Multilingual vector similarity (HuggingFace MiniLM) | ~10ms |
 | **LLM Verification** | Semantic match confirmation via external LLM | ~1s |
 
 - **Alias creation**: L2/L3 semantic matches are aliased for instant L1 hits on repeat
@@ -437,6 +441,19 @@ NLM_PROXY_CACHE_RESPONSE_CACHE_MAX_ENTRIES=1000
 NLM_PROXY_CACHE_SEMANTIC_MATCH_ENABLED=true
 NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.5
 NLM_PROXY_CACHE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+
+# Smart Routing
+NLM_PROXY_ROUTING_LLM_BASE_URL=https://api.openai.com/v1
+NLM_PROXY_ROUTING_LLM_API_KEY=sk-your-openai-key
+NLM_PROXY_ROUTING_LLM_MODEL=gpt-4o-mini
+NLM_PROXY_ROUTING_ROUTER_MODEL_NAME=knowledge-finder
+NLM_PROXY_ROUTING_SUMMARY_CACHE_TTL=3600
+NLM_PROXY_ROUTING_SOURCE_FETCH_CONCURRENCY=10
+
+# Agent Settings (LangChain/LangGraph)
+NLM_PROXY_AGENT_LLM_PROVIDER=openai              # openai | anthropic | ollama
+NLM_PROXY_AGENT_EMBEDDING_PROVIDER=huggingface    # huggingface | openai
+NLM_PROXY_AGENT_FALLBACK_ON_ERROR=true            # fall back on routing error
 ```
 
 ### Usage Examples
@@ -512,28 +529,38 @@ For comprehensive setup instructions, configuration options, and troubleshooting
 
 ```
 src/nlm_proxy/
-├── __init__.py         # Package version
-├── cli.py              # Unified CLI entry point
-├── core/               # Standalone library (no framework deps)
-│   ├── __init__.py     # Public exports
-│   ├── client.py       # NotebookLMClient
-│   ├── auth.py         # Token management
-│   ├── constants.py    # Code mappings
-│   └── exceptions.py   # Custom exceptions
-├── mcp/                # MCP server (optional)
-│   ├── __init__.py     # Lazy imports
-│   └── server.py       # FastMCP tools
-└── openai/             # OpenAI proxy (optional)
-    ├── __init__.py     # Lazy imports
-    ├── server.py       # FastAPI routes
-    ├── session.py      # Session management
-    └── types.py        # Pydantic models
+├── __init__.py           # Package version
+├── cli.py                # Unified CLI entry point
+├── core/                 # Standalone library + shared components
+│   ├── __init__.py       # Public exports
+│   ├── agent.py          # AgentCore orchestration (shared by OpenAI + MCP)
+│   ├── client.py         # NotebookLMClient
+│   ├── auth.py           # Token management
+│   ├── config.py         # Pydantic settings (all prefixes)
+│   ├── constants.py      # Code mappings
+│   ├── exceptions.py     # Custom exceptions
+│   ├── llm_client.py     # LangChain ChatModel factory + LLM client
+│   ├── notebook_cache.py # NotebookCache with proactive background refresh
+│   ├── response_cache.py # Three-layer response cache (L1/L2/L3)
+│   ├── routing_graph.py  # LangGraph StateGraph (classify + select nodes)
+│   └── session.py        # SessionStore (chat_id → conversation_id)
+├── mcp/                  # MCP server (optional)
+│   ├── __init__.py       # Lazy imports
+│   └── server.py         # FastMCP tools (uses AgentCore for queries)
+└── openai/               # OpenAI proxy (optional)
+    ├── __init__.py       # Lazy imports
+    ├── prompts/          # LLM prompt templates
+    ├── server.py         # FastAPI routes (four-phase pipeline)
+    ├── session.py        # Re-export (canonical: core/session.py)
+    └── types.py          # Pydantic models
 ```
 
-Key cache files:
-- `core/config.py` — `CacheSettings` (env prefix: `NLM_PROXY_CACHE_`)
+Key files:
+- `core/agent.py` — `AgentCore` singleton (routing, caching, NLM queries)
+- `core/routing_graph.py` — LangGraph `StateGraph` with classify + select_notebook nodes
+- `core/llm_client.py` — `create_chat_model()` factory, `LangChainLLMClient` wrapper
 - `core/response_cache.py` — `ResponseCache` with pre-routing L1, three-layer lookup, alias creation
-- `openai/notebook_cache.py` — Source change detection + auto-invalidation
+- `core/notebook_cache.py` — `NotebookCache` with source change detection + auto-invalidation
 - `scripts/cache-log-analyzer.py` — Log analysis tool (`--json`, `--queries`, `--summary`)
 
 ## MCP Tools

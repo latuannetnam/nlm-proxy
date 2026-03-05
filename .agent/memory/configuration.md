@@ -17,6 +17,7 @@ Unified configuration using pydantic-settings with precedence:
 | `SmartRoutingSettings` | `NLM_PROXY_ROUTING_` | Smart routing and source fetching |
 | `TracingSettings` | `NLM_PROXY_OTEL_` | OpenTelemetry tracing settings |
 | `CacheSettings` | `NLM_PROXY_CACHE_` | Response cache settings |
+| `AgentSettings` | `NLM_PROXY_AGENT_` | LangChain/LangGraph agent configuration |
 
 ## Environment Variables
 
@@ -69,10 +70,18 @@ NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED=true
 NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400          # 4 hours
 NLM_PROXY_CACHE_RESPONSE_CACHE_MAX_ENTRIES=1000
 NLM_PROXY_CACHE_SEMANTIC_MATCH_ENABLED=true
-NLM_PROXY_CACHE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-mpnet-base-v2
-NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.7
+NLM_PROXY_CACHE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.5
 NLM_PROXY_CACHE_SIMILARITY_EXACT_THRESHOLD=0.85
 NLM_PROXY_CACHE_SEMANTIC_MATCH_TOP_K=10
+
+# Agent Settings (LangChain/LangGraph)
+NLM_PROXY_AGENT_LLM_PROVIDER=openai              # openai | anthropic | ollama
+NLM_PROXY_AGENT_EMBEDDING_PROVIDER=huggingface    # huggingface | openai
+NLM_PROXY_AGENT_MEMORY_BACKEND=memory             # memory | sqlite | postgres
+NLM_PROXY_AGENT_MEMORY_DB_PATH=~/.nlm-proxy/memory.db
+NLM_PROXY_AGENT_MAX_ITERATIONS=10
+NLM_PROXY_AGENT_FALLBACK_ON_ERROR=true
 ```
 
 ## Tracing Authentication & TLS
@@ -125,14 +134,15 @@ from nlm_proxy.core.config import (
     get_openai_settings,
     get_auth_settings,
     get_logging_settings,
+    get_agent_settings,
 )
 
 # Singleton instances
 shared = get_shared_settings()
 print(shared.debug)  # False by default
 
-mcp = get_mcp_settings()
-print(mcp.port)  # 8000 by default
+agent = get_agent_settings()
+print(agent.llm_provider)  # "openai" by default
 ```
 
 ## CLI Override Example

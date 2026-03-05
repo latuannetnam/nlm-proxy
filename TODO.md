@@ -1,8 +1,7 @@
 # Project Roadmap & Todo
 
-## 🚧 In Progress
-- [Doing] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks: Memory management, Response caching, Cross-notebook query support: docs\plans\2026-03-03-langchain-refactor-design.md  
-- [] Fix all failed, skipped tests
+## 🚧 In Progress 
+- [] verify Otel work with new refactor
 - [] Refactor client.py: file too large
 - [] Add support for Cloud-based embedding model (for example OpenAI, Gemini, Cohere, etc): local model work good enough for now
 - [ ] Enhance conversation management
@@ -28,3 +27,5 @@
 - [x] **Performance**Response Cache: docs\plans\2026-03-02-response-cache-implementation.md
 - [x] **Monitoring** Montior Response Cache metrics: via API /v1/cache/stats and script scripts\cache-stats.ps1 + Cache Log Analyzer: scripts\cache-log-analyzer.py
 - [x] Migrate Claude memory to Antigravity
+- [x] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks: Memory management, Response caching, Cross-notebook query support: docs\plans\2026-03-03-langchain-refactor-design.md
+- [x] Fix all failed, skipped tests

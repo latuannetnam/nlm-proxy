@@ -22,22 +22,27 @@ Smart routing uses an external LLM (e.g., GPT-4o-mini) to analyze each request a
 │                     └──────────────────────────────────────────┬─┘ │   │
 │                                                                │   │   │
 │  ┌─────────────────────────────────────────────────────────────▼───┐   │
-│  │                      SmartRouter                                │   │
+│  │                  AgentCore (shared singleton)                   │   │
+│  │                                                                 │   │
+│  │  Phase 0: Pre-routing cache (global L1)                         │   │
+│  │                                                                 │   │
+│  │  Phase 1: LangGraph Routing StateGraph                          │   │
 │  │  ┌─────────────────┐    ┌─────────────────┐                     │   │
-│  │  │ classify_request│───>│  RequestType    │                     │   │
-│  │  │  (LLM call)     │    │  NOTEBOOKLM or  │                     │   │
-│  │  └─────────────────┘    │  LLM_TASK       │                     │   │
+│  │  │ classify_node   │───>│  request_type   │                     │   │
+│  │  │  (LLM call)     │    │  notebooklm or  │                     │   │
+│  │  └─────────────────┘    │  llm_task       │                     │   │
 │  │                         └────────┬────────┘                     │   │
 │  │                                  │                              │   │
 │  │         ┌────────────────────────┴────────────────────┐         │   │
 │  │         │                                             │         │   │
 │  │         ▼                                             ▼         │   │
 │  │  ┌──────────────┐                          ┌──────────────┐     │   │
-│  │  │ NOTEBOOKLM   │                          │ LLM_TASK     │     │   │
+│  │  │ notebooklm   │                          │ llm_task     │     │   │
 │  │  │              │                          │              │     │   │
 │  │  │ select_      │                          │ Passthrough  │     │   │
-│  │  │ notebook()   │                          │ to External  │     │   │
-│  │  │ (LLM call    │                          │ LLM          │     │   │
+│  │  │ notebook_    │                          │ to External  │     │   │
+│  │  │ node()       │                          │ LLM          │     │   │
+│  │  │ (LLM call    │                          │              │     │   │
 │  │  │ with sources)│                          │              │     │   │
 │  │  └──────┬───────┘                          └──────┬───────┘     │   │
 │  │         │                                         │             │   │
@@ -46,7 +51,8 @@ Smart routing uses an external LLM (e.g., GPT-4o-mini) to analyze each request a
 │            ▼                                         ▼                 │
 │  ┌──────────────────┐                     ┌──────────────────┐         │
 │  │   NotebookLM     │                     │   External LLM   │         │
-│  │   (via client)   │                     │   (OpenAI SDK)   │         │
+│  │   (via client)   │                     │   (LangChain     │         │
+│  │                  │                     │    ChatModel)    │         │
 │  └──────────────────┘                     └──────────────────┘         │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -96,37 +102,39 @@ The smart router uses **source-level information** to make more accurate noteboo
 
 ## Components
 
-### 1. ExternalLLMClient (`core/llm_client.py`)
+### 1. LangChainLLMClient (`core/llm_client.py`)
 
-A reusable client for calling OpenAI-compatible LLM endpoints using the official OpenAI SDK.
+A LangChain-based client for calling external LLM providers.
 
 **Features:**
-- Lazy initialization of AsyncOpenAI client
-- Non-streaming `complete()` for classification tasks
-- Streaming `stream()` for LLM task passthrough
-- Configurable base URL, API key, and model
+- `create_chat_model()` factory supporting openai, anthropic, ollama, azure via LangChain
+- `LangChainLLMClient` wrapper with simplified interface
+- Non-streaming `complete()` for L3 cache verification
+- Non-streaming `ainvoke()` for classification/selection
+- Streaming `astream()` for LLM task passthrough
 
 **Usage:**
 ```python
-from nlm_proxy.core.llm_client import ExternalLLMClient
+from nlm_proxy.core.llm_client import create_chat_model, LangChainLLMClient
 
-client = ExternalLLMClient(
+chat_model = create_chat_model(
+    model="gpt-4o-mini",
+    provider="openai",
     base_url="https://api.openai.com/v1",
     api_key="sk-...",
-    model="gpt-4o-mini"
 )
 
-# Simple completion
-result = await client.complete("Classify this request...", max_tokens=50)
+client = LangChainLLMClient(chat_model)
 
-# Streaming
-async for chunk in await client.stream(messages):
-    print(chunk.choices[0].delta.content)
+# Simple completion (L3 cache verification)
+result = await client.complete("Are these semantically equivalent?", max_tokens=50)
 
-await client.close()
+# Streaming (LLM task passthrough)
+async for chunk in client.astream(messages):
+    print(chunk.content, end="")
 ```
 
-### 2. NotebookCache (`openai/notebook_cache.py`)
+### 2. NotebookCache (`core/notebook_cache.py`)
 
 Proactive thread-safe cache for notebook summaries **and source information** with background refresh.
 
@@ -138,26 +146,20 @@ Proactive thread-safe cache for notebook summaries **and source information** wi
 - **Thread-safe operations**: All cache operations protected with locks
 - **Graceful shutdown**: Background thread stops cleanly on server shutdown
 - **Graceful degradation**: If source fetch fails, keeps source with basic info
-- **Shared instance**: Single cache instance shared across all router instances via `app.state`
+- **Shared instance**: Single cache instance shared via `AgentCore` (used by both OpenAI + MCP)
 
 **Architecture:**
 ```python
-# Server startup (in openai/server.py)
-@app.on_event("startup")
-async def startup():
-    # Create shared cache - blocks until initial fetch completes
-    app.state.notebook_cache = NotebookCache(
-        nlm_client=nlm_client,
-        ttl_seconds=config.summary_cache_ttl,
-        source_fetch_concurrency=config.source_fetch_concurrency
-    )
-    # Background refresh thread started automatically
-
-# Router uses shared cache (always warm with source info)
-router = SmartRouter(
+# Server startup (in openai/server.py:main())
+notebook_cache = NotebookCache(
     nlm_client=nlm_client,
-    notebook_cache=app.state.notebook_cache,  # Shared cache
-    ...
+    ttl_seconds=config.summary_cache_ttl,
+    source_fetch_concurrency=config.source_fetch_concurrency
+)
+
+# AgentCore uses notebook_cache for routing
+agent_core = AgentCore(
+    nlm_client, notebook_cache, response_cache, chat_model
 )
 
 # Background refresh loop (internal to NotebookCache)
@@ -264,30 +266,49 @@ Server Start                    Refresh 1 (48 min)         Refresh 2 (96 min)
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3. SmartRouter (`openai/router.py`)
+### 3. LangGraph Routing Graph (`core/routing_graph.py`)
 
-The main routing logic that classifies requests and selects notebooks using source-level information.
+A LangGraph `StateGraph` that replaces the linear `SmartRouter` class with a graph of composable nodes.
 
 **Key Classes:**
 
 ```python
-class RequestType(Enum):
-    NOTEBOOKLM = "notebooklm"  # Knowledge queries
-    LLM_TASK = "llm_task"      # General LLM tasks
+class RouterState(TypedDict):
+    query: str
+    messages: list                         # Reserved for LangGraph memory
+    request_type: str | None               # "notebooklm" | "llm_task"
+    notebook_id: str | None
+    reasoning: str
+    available_notebooks: list[dict]
+    allowed_notebooks: list[str] | None    # Per-request ACL
 
 @dataclass
-class RoutingDecision:
-    request_type: RequestType
+class RoutingDecision:                     # Returned by AgentCore.route()
+    request_type: str
     notebook_id: str | None = None
     reasoning: str = ""
+    cache_result: object | None = None     # CachedResponse on cache hit
+    cache_hit_type: str | None = None
+    conversation_id: str | None = None
+```
+
+**Graph Structure:**
+
+```
+START → classify_node → route_after_classify
+                           ├─ "notebooklm" → select_notebook_node → END
+                           └─ "llm_task"   → END
 ```
 
 **Routing Flow:**
 
-1. `route(query)` - Main entry point
-2. `classify_request(query)` - Determines NOTEBOOKLM vs LLM_TASK
-3. `select_notebook(query)` - If NOTEBOOKLM, finds best notebook using source info
+1. `AgentCore.route(query, options)` — Main entry point
+2. Phase 0: Pre-routing global L1 cache check
+3. Phase 1: `routing_graph.ainvoke({query, allowed_notebooks})`
+   - `classify_node()` — LLM call to determine notebooklm vs llm_task
+   - `select_notebook_node()` — LLM call to find best notebook (with ACL filtering)
 4. Returns `RoutingDecision` with type, notebook_id, and reasoning
+5. On error: fallback to first available notebook (if `agent_fallback_on_error=true`)
 
 **Notebook Selection Data:**
 ```python
@@ -384,30 +405,43 @@ Respond with ONLY the notebook_id (UUID) of the most relevant notebook.
 
 **Key Functions:**
 
-- `handle_smart_routing()` - Entry point when model="knowledge-finder"
-- `stream_smart_response()` - Streaming with reasoning_content for routing decision
+- `handle_smart_routing()` - Entry point when model="knowledge-finder" (four-phase pipeline)
+- `stream_smart_response()` - Phase 3a: Streaming with reasoning_content for routing decision
+- `_handle_non_streaming()` - Phase 3b: Non-streaming JSON response
 
-**Request Flow:**
+**Four-Phase Pipeline:**
 ```
-POST /v1/chat/completions
+POST /v1/chat/completions (model = "knowledge-finder")
   │
-  ├─ model == "knowledge-finder"
-  │     └─> handle_smart_routing()
-  │           ├─> Extract chat_id from headers/metadata
-  │           ├─> Lookup conversation_id from SessionStore
-  │           ├─> First-turn cache check (ResponseCache.lookup)
-  │           │     └─ HIT → return cached response + X-Cache-Status: HIT
-  │           ├─> router.route(query)
-  │           ├─> If LLM_TASK: stream from external LLM
-  │           └─> If NOTEBOOKLM: stream from selected notebook
-  │                 ├─> Save conversation_id to SessionStore
-  │                 └─> Store response in ResponseCache
-  │
-  └─ model == notebook_id
-        └─> Direct NotebookLM query (existing flow)
-              ├─> First-turn cache check (ResponseCache.lookup)
-              │     └─ HIT → return cached response + X-Cache-Status: HIT
-              └─> Store response in ResponseCache
+  └─> handle_smart_routing()
+        │
+        ├─ Phase 0: Pre-routing cache check
+        │     └─ AgentCore.route() checks global L1 → instant hit skips routing
+        │
+        ├─ Phase 1: LangGraph routing
+        │     └─ AgentCore.route() → classify_node + select_notebook_node
+        │
+        ├─ Phase 2: Post-routing cache check
+        │     └─ ResponseCache.lookup_async() → three-layer lookup
+        │     └─ HIT → return cached response + X-Cache-Status: HIT
+        │
+        └─ Phase 3: Execute
+              ├─ 3a: stream_smart_response() — SSE with reasoning_content
+              │     ├─ If LLM_TASK: stream from LangChain ChatModel
+              │     └─ If NOTEBOOKLM: stream from selected notebook
+              │           ├─ Save conversation_id via AgentCore session helpers
+              │           └─ Store response in ResponseCache
+              └─ 3b: _handle_non_streaming() — JSON response
+```
+
+**Direct Notebook Queries** (model == notebook_id):
+```
+chat_completions()
+  ├─> AgentCore.handle_direct_query() for cache check
+  │     └─ HIT → return cached response + X-Cache-Status: HIT
+  └─> NLM query (streaming or non-streaming)
+        ├─ Save conversation_id to SessionStore
+        └─ Store response in ResponseCache
 ```
 
 ### 6. Response Cache (`core/response_cache.py`)
@@ -428,7 +462,7 @@ Three-layer cache that eliminates 40-50s latency for repeated/similar queries:
 │  └─────────────┬───────────────┘                                  │
 │                │ MISS                                              │
 │                ▼                                                   │
-│  Layer 2: Embedding Pre-filter (fastembed + numpy)                │
+│  Layer 2: Embedding Pre-filter (HuggingFace + NumPy)                │
 │  ┌─────────────────────────────┐                                  │
 │  │ Cosine similarity ≥ 0.7    │── No candidates ──> MISS         │
 │  │ Top-K candidates           │                                  │
@@ -663,8 +697,8 @@ The smart routing feature uses specific logging tags for debugging:
 
 | Tag | Component | Description |
 |-----|-----------|-------------|
-| `[LLM]` | ExternalLLMClient | External LLM API calls |
-| `[ROUTER]` | SmartRouter | Classification and notebook selection |
+| `[LLM]` | LangChainLLMClient | External LLM API calls |
+| `[ROUTING]` | LangGraph routing graph | Classification and notebook selection |
 | `[SMART-ROUTER]` | Server | High-level routing decisions |
 | `[CACHE]` | NotebookCache | Cache operations and source fetching |
 
@@ -679,16 +713,15 @@ DEBUG [CACHE] Cached Project Notes: 2 sources
 INFO  [CACHE] Initial fetch complete: 3 notebooks cached
 DEBUG [CACHE] Background refresh thread started
 
-INFO  [ROUTER] Starting routing for query: What does the Attention paper say...
-DEBUG [ROUTER] Classifying request: What does the Attention paper say...
-DEBUG [LLM] Calling complete: model=gpt-4o-mini, max_tokens=50
-DEBUG [LLM] Response: notebooklm
-INFO  [ROUTER] Classified as NOTEBOOKLM query
-DEBUG [ROUTER] Selecting notebook for query: What does the Attention paper say...
-DEBUG [ROUTER] Using 3 cached notebooks
-DEBUG [ROUTER] Asking LLM to select from 3 notebooks
-INFO  [ROUTER] Selected notebook: ML Research (ID: abc-123)
-INFO  [ROUTER] Routing to NotebookLM: abc-123
+INFO  [ROUTING] Starting routing for query: What does the Attention paper say...
+DEBUG [ROUTING] Classifying request: What does the Attention paper say...
+DEBUG [LLM] complete: prompt=You are a request classifier...
+DEBUG [LLM] complete result: notebooklm
+INFO  [ROUTING] Classified as notebooklm query
+DEBUG [ROUTING] Selecting notebook for query: What does the Attention paper say...
+DEBUG [ROUTING] Using 3 cached notebooks
+DEBUG [ROUTING] Asking LLM to select from 3 notebooks
+INFO  [ROUTING] Selected notebook: ML Research (ID: abc-123)
 INFO  [SMART-ROUTER] Decision: notebooklm, notebook=abc-123
 ```
 
@@ -959,15 +992,16 @@ smart_router.handle_request (parent span - full request lifecycle)
 ├── response_content: "The Transformer architecture..." (truncated)
 ├── response_source: "notebooklm" or "llm"
 │
-└── smart_router.route (child span - routing decision)
-    ├── request_type: "NOTEBOOKLM"
+└── AgentCore.route() → LangGraph StateGraph
+    ├── request_type: "notebooklm"
     ├── notebook_id: "abc-123"
     │
-    ├── smart_router.classify (grandchild span)
-    │   ├── classification_result: "NOTEBOOKLM"
+    ├── classify_node (LangGraph node)
+    │   ├── classification_result: "notebooklm"
     │   └── llm_model: "gpt-4o-mini"
     │
-    └── smart_router.select_notebook (grandchild span)
+    └── select_notebook_node (LangGraph node)
+        ├── acl_filter_applied, acl_matched_count
         ├── candidates_count: 3
         ├── selected_notebook_id: "abc-123"
         └── selected_notebook_title: "ML Research"

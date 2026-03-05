@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**NLM Proxy** — OpenAI-compatible proxy for NotebookLM. Provides programmatic access to NotebookLM (notebooklm.google.com) via MCP server and OpenAI-compatible REST API. Features smart routing that automatically classifies requests and routes them to NotebookLM (knowledge queries) or external LLM (general tasks). Includes a three-layer response cache (exact match → embedding pre-filter → LLM verification) that eliminates 40-50s latency for repeated queries. Tested with personal/free tier accounts. Relies on internal `batchexecute` RPCs.
+**NLM Proxy** — OpenAI-compatible proxy for NotebookLM. Provides programmatic access to NotebookLM (notebooklm.google.com) via MCP server and OpenAI-compatible REST API. Features smart routing powered by **LangChain/LangGraph** that automatically classifies requests and routes them to NotebookLM (knowledge queries) or external LLM (general tasks) through an **AgentCore** orchestration layer shared by both OpenAI proxy and MCP server. Includes a three-layer response cache (exact match → embedding pre-filter → LLM verification) that eliminates 40-50s latency for repeated queries. Tested with personal/free tier accounts. Relies on internal `batchexecute` RPCs.
 
 ## Rules
 

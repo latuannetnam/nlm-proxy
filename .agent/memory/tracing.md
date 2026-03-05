@@ -25,15 +25,16 @@ smart_router.handle_request (parent - full request lifecycle)
 ├── response_content (attribute) - truncated per RESPONSE_MAX_LENGTH
 ├── response_source (attribute) - "llm" or "notebooklm"
 │
-└── smart_router.route (child - routing decision)
-    ├── request_type: "NOTEBOOKLM" or "LLM_TASK"
+└── AgentCore.route() → LangGraph StateGraph
+    ├── request_type: "notebooklm" or "llm_task"
     ├── notebook_id: selected notebook UUID
     │
-    ├── smart_router.classify (grandchild)
+    ├── classify_node (LangGraph node)
     │   ├── classification_result
     │   └── llm_model
     │
-    └── smart_router.select_notebook (grandchild, if NotebookLM)
+    └── select_notebook_node (LangGraph node, if notebooklm)
+        ├── acl_filter_applied, acl_matched_count
         ├── candidates_count
         ├── selected_notebook_id
         └── selected_notebook_title
@@ -47,10 +48,10 @@ smart_router.handle_request (parent - full request lifecycle)
 
 Streaming and non-streaming requests require different span ownership patterns due to how FastAPI/Starlette handles `StreamingResponse`:
 
-**Non-streaming path** (`server.py:handle_smart_routing`):
+**Non-streaming path** (`server.py:_handle_non_streaming`):
 - Creates span with `tracer.start_as_current_span("smart_router.handle_request")`
 - Adds `user_query` after extracting from messages
-- Calls `router.route(query)` (creates child spans)
+- Calls `agent_core.route(query)` → LangGraph routing
 - Executes LLM or NotebookLM request
 - Adds `response_content` and `response_source` before returning
 - Span closes when function returns
@@ -66,6 +67,8 @@ Streaming and non-streaming requests require different span ownership patterns d
 ### Key Files
 
 - `src/nlm_proxy/core/config.py` - TracingSettings with request/response max lengths
+- `src/nlm_proxy/core/agent.py` - AgentCore.route() with fallback-on-error
+- `src/nlm_proxy/core/routing_graph.py` - LangGraph routing nodes (classify, select)
 - `src/nlm_proxy/openai/server.py` - handle_smart_routing and stream_smart_response
 - `docker/grafana/provisioning/dashboards/routing-analytics.json` - Updated queries
 

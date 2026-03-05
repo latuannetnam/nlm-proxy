@@ -46,6 +46,12 @@ Tools marked (CONFIRM) require `confirm=True`:
 - **Sync** - Show stale sources first: `source_sync_drive`
 - **Studio creation** - Get user approval first: all `*_create` tools
 
+## AgentCore Integration
+
+Query tools (`notebook_query`, `notebook_query_stream`) use the shared `AgentCore` singleton when smart routing is configured. The `get_agent_core()` function lazily initializes the same components as the OpenAI proxy: `NotebookCache`, `ResponseCache`, `LangChain ChatModel`, and `SessionStore`.
+
+If smart routing is not configured (no `LLM_API_KEY`), query tools fall back to direct `NotebookLMClient` calls.
+
 ## Features NOT Implemented
 
 - Notes (save chat responses)
