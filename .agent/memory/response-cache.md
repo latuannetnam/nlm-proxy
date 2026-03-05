@@ -1,6 +1,6 @@
 # Response Cache
 
-Three-layer response cache eliminating 40-50s latency for repeated queries. Global, in-memory, volatile (lost on restart).
+Two-layer response cache eliminating 40-50s latency for repeated queries. Global, in-memory, volatile (lost on restart).
 
 ## Two-Phase Lookup Architecture
 
@@ -12,15 +12,16 @@ Before smart routing runs, `lookup_global(query)` checks a query-only hash index
 
 Uses `_global_hash_index` (query hash without notebook_id) and `pre_routing_l1_hits` counter separated from post-routing `l1_hits`.
 
-### Phase 2: Post-routing Three-Layer Lookup
+### Phase 2: Post-routing Two-Layer Lookup
 
 | Layer | Mechanism | Latency | When |
 |-------|-----------|---------|------|
 | L1 | Exact hash match | ~0ms | Always |
 | L2 | Embedding cosine similarity (HuggingFace + NumPy) | ~10-30ms | If semantic enabled |
-| L3 | LLM verification | ~1-2s | If L2 finds candidates below exact threshold |
 
-**Early termination:** L2 similarity ≥ 0.85 skips L3 (returns directly). L3 retries once on empty LLM response.
+> **Design Note:** L3 (LLM verification) was removed because it consistently misjudged HIT/MISS decisions in production, decreasing cache precision while adding 1-2s latency per lookup. L2 embedding similarity with a tuned threshold (0.93) proved more reliable and faster.
+
+**Matching:** L2 similarity ≥ 0.93 → cache HIT (creates alias for future L1 hits).
 
 ## Alias Creation
 
@@ -40,12 +41,10 @@ NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400          # 4 hours
 NLM_PROXY_CACHE_RESPONSE_CACHE_MAX_ENTRIES=1000
 NLM_PROXY_CACHE_SEMANTIC_MATCH_ENABLED=true
 NLM_PROXY_CACHE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2  # 0.22GB
-NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.5           # L2 pre-filter threshold
-NLM_PROXY_CACHE_SIMILARITY_EXACT_THRESHOLD=0.85
-NLM_PROXY_CACHE_SEMANTIC_MATCH_TOP_K=10
+NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.93           # L2 semantic match threshold
 ```
 
-**Startup warning:** If `SIMILARITY_THRESHOLD < 0.7` and no LLM client is configured for L3 verification, a warning is logged about potential false positives.
+
 
 ## Installation
 
@@ -73,7 +72,7 @@ The `GET /v1/cache/stats` endpoint returns:
 - `entries`, `aliases` — primary entries vs alias count
 - `total_hits`, `total_misses`, `total_bypasses` — aggregate counters
 - `hit_rate` — percentage (0-100)
-- `pre_routing_l1_hits`, `l1_hits`, `l2_hits`, `l3_hits`, `l3_misses` — per-layer breakdown
+- `pre_routing_l1_hits`, `l1_hits`, `l2_hits` — per-layer breakdown
 - `entry_count`, `notebook_count` — storage usage
 - `max_entries`, `ttl_seconds`, `semantic_enabled` — config
 
@@ -101,9 +100,10 @@ When `NotebookCache` detects source changes in a notebook, it calls `ResponseCac
 
 ## Key Files
 
-- `core/response_cache.py` — Cache implementation (L1/L2/L3, global lookup, aliases, stats)
+- `core/response_cache.py` — Cache implementation (L1/L2, global lookup, aliases, stats)
 - `core/config.py` — `CacheSettings` class
 - `openai/server.py` — Cache integration (pre-routing L1, check, store, endpoints)
 - `openai/notebook_cache.py` — Auto-invalidation callback
 - `tests/core/test_response_cache.py` — Unit tests (L1, global lookup, aliases)
+- `tests/core/test_response_cache_semantic.py` — L2 embedding tests + async lookup tests
 - `tests/core/test_embedding_models.py` — Embedding model validation suite

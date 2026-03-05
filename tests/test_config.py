@@ -311,9 +311,7 @@ class TestCacheSettings:
         assert settings.response_cache_max_entries == 1000
         assert settings.semantic_match_enabled is True
         assert settings.embedding_model == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-        assert settings.similarity_threshold == 0.5
-        assert settings.similarity_exact_threshold == 0.85
-        assert settings.semantic_match_top_k == 10
+        assert settings.similarity_threshold == 0.93
 
     def test_env_override(self, monkeypatch):
         """Test CacheSettings loads from environment."""

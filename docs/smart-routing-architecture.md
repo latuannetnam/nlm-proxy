@@ -109,7 +109,6 @@ A LangChain-based client for calling external LLM providers.
 **Features:**
 - `create_chat_model()` factory supporting openai, anthropic, ollama, azure via LangChain
 - `LangChainLLMClient` wrapper with simplified interface
-- Non-streaming `complete()` for L3 cache verification
 - Non-streaming `ainvoke()` for classification/selection
 - Streaming `astream()` for LLM task passthrough
 
@@ -126,8 +125,8 @@ chat_model = create_chat_model(
 
 client = LangChainLLMClient(chat_model)
 
-# Simple completion (L3 cache verification)
-result = await client.complete("Are these semantically equivalent?", max_tokens=50)
+# Classification/selection
+result = await chat_model.ainvoke(messages)
 
 # Streaming (LLM task passthrough)
 async for chunk in client.astream(messages):
@@ -422,7 +421,7 @@ POST /v1/chat/completions (model = "knowledge-finder")
         │     └─ AgentCore.route() → classify_node + select_notebook_node
         │
         ├─ Phase 2: Post-routing cache check
-        │     └─ ResponseCache.lookup_async() → three-layer lookup
+        │     └─ ResponseCache.lookup_async() → two-layer lookup (L1 exact + L2 embedding)
         │     └─ HIT → return cached response + X-Cache-Status: HIT
         │
         └─ Phase 3: Execute
@@ -446,7 +445,9 @@ chat_completions()
 
 ### 6. Response Cache (`core/response_cache.py`)
 
-Three-layer cache that eliminates 40-50s latency for repeated/similar queries:
+Two-layer cache that eliminates 40-50s latency for repeated/similar queries:
+
+> **Design Note:** L3 (LLM verification) was removed because it consistently misjudged HIT/MISS decisions in production, decreasing cache precision while adding 1-2s latency per lookup. L2 embedding similarity with a tuned threshold (0.93) proved more reliable and faster.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -462,18 +463,13 @@ Three-layer cache that eliminates 40-50s latency for repeated/similar queries:
 │  └─────────────┬───────────────┘                                  │
 │                │ MISS                                              │
 │                ▼                                                   │
-│  Layer 2: Embedding Pre-filter (HuggingFace + NumPy)                │
+│  Layer 2: Embedding Similarity (HuggingFace + NumPy)              │
 │  ┌─────────────────────────────┐                                  │
-│  │ Cosine similarity ≥ 0.7    │── No candidates ──> MISS         │
-│  │ Top-K candidates           │                                  │
-│  └─────────────┬───────────────┘                                  │
-│                │ Candidates found                                  │
-│                ▼                                                   │
-│  Layer 3: LLM Verification                                        │
-│  ┌─────────────────────────────┐                                  │
-│  │ "Are these semantically     │── YES ──> Return cached response │
-│  │  equivalent?"               │── NO  ──> MISS                  │
+│  │ Cosine similarity ≥ 0.93   │── HIT ──> Return cached response  │
+│  │ Best match above threshold │── MISS ─> No match found          │
 │  └─────────────────────────────┘                                  │
+│                                                                    │
+│  On L2 HIT: Create alias for instant L1 hits on future repeats   │
 └────────────────────────────────────────────────────────────────────┘
 ```
 

@@ -986,24 +986,12 @@ def main(host: str = "0.0.0.0", port: int = 8080, session_ttl: int = 86400):
     cache_settings = get_cache_settings()
     if cache_settings.response_cache_enabled:
         try:
-            llm_client = None
-            if cache_settings.semantic_match_enabled and routing_settings.llm_api_key:
-                chat_model = create_chat_model(
-                    model=routing_settings.llm_model,
-                    base_url=routing_settings.llm_base_url,
-                    api_key=routing_settings.llm_api_key,
-                )
-                llm_client = LangChainLLMClient(chat_model=chat_model)
-
             app.state.response_cache = ResponseCache(
                 max_entries=cache_settings.response_cache_max_entries,
                 ttl_seconds=cache_settings.response_cache_ttl,
                 semantic_enabled=cache_settings.semantic_match_enabled,
-                llm_client=llm_client,
                 embedding_model=cache_settings.embedding_model,
                 similarity_threshold=cache_settings.similarity_threshold,
-                similarity_exact_threshold=cache_settings.similarity_exact_threshold,
-                top_k=cache_settings.semantic_match_top_k,
             )
             logger.info(
                 "Response cache initialized: max_entries=%d, ttl=%ds, semantic=%s",

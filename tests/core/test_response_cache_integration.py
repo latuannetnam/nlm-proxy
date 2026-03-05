@@ -1,4 +1,4 @@
-"""Tests for full three-layer cache lookup integration."""
+"""Tests for full two-layer cache lookup integration."""
 import time
 import numpy as np
 import pytest
@@ -6,17 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestFullCacheLookup:
-    """Test the complete L1 → L2 → L3 lookup flow."""
+    """Test the complete L1 → L2 lookup flow."""
 
     @pytest.mark.asyncio
-    async def test_l1_hit_skips_l2_l3(self):
-        """Exact hash match should return immediately without embedding or LLM."""
+    async def test_l1_hit_skips_l2(self):
+        """Exact hash match should return immediately without embedding."""
         from nlm_proxy.core.response_cache import ResponseCache
 
-        mock_llm = AsyncMock()
         cache = ResponseCache(
             max_entries=100, ttl_seconds=3600,
-            semantic_enabled=True, llm_client=mock_llm,
+            semantic_enabled=True,
         )
 
         cache.store("nb-1", "key points?", "answer", None, "conv-1")
@@ -25,17 +24,15 @@ class TestFullCacheLookup:
         assert result is not None
         assert result.answer == "answer"
         assert hit_type == "exact"
-        mock_llm.complete.assert_not_called()  # L3 not invoked
 
     @pytest.mark.asyncio
-    async def test_l2_no_candidates_skips_l3(self):
-        """No embedding candidates → skip LLM → miss."""
+    async def test_l2_no_candidates_returns_miss(self):
+        """No embedding candidates → miss."""
         from nlm_proxy.core.response_cache import ResponseCache
 
-        mock_llm = AsyncMock()
         cache = ResponseCache(
             max_entries=100, ttl_seconds=3600,
-            semantic_enabled=True, llm_client=mock_llm,
+            semantic_enabled=True,
         )
 
         # No entries stored
@@ -43,17 +40,15 @@ class TestFullCacheLookup:
 
         assert result is None
         assert hit_type is None
-        mock_llm.complete.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_l2_high_similarity_skips_l3(self):
-        """Similarity >= 0.95 should skip LLM and return directly."""
+    async def test_l2_high_similarity_returns_hit(self):
+        """Similarity >= threshold should return hit directly."""
         from nlm_proxy.core.response_cache import ResponseCache
 
-        mock_llm = AsyncMock()
         cache = ResponseCache(
             max_entries=100, ttl_seconds=3600,
-            semantic_enabled=True, llm_client=mock_llm,
+            semantic_enabled=True,
         )
 
         emb = np.array([1.0, 0.0, 0.0])
@@ -67,7 +62,6 @@ class TestFullCacheLookup:
 
         assert result is not None
         assert hit_type == "semantic"
-        mock_llm.complete.assert_not_called()  # Skipped L3
 
     @pytest.mark.asyncio
     async def test_semantic_disabled_only_l1(self):

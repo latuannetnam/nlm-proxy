@@ -111,16 +111,17 @@ response = client.chat.completions.create(
 See [Smart Routing Architecture](docs/smart-routing-architecture.md) for details.
 
 ### Response Cache
-Four-layer cache that eliminates 40-50s latency for repeated and semantically similar queries:
+Two-layer cache that eliminates 40-50s latency for repeated and semantically similar queries:
 
 | Layer | Method | Speed |
 |-------|--------|-------|
 | **Pre-routing L1** | Global query hash (skips routing entirely) | Instant |
 | **Exact Match** | Hash-based lookup with LRU eviction and TTL | Instant |
-| **Embedding Pre-filter** | Multilingual vector similarity (HuggingFace MiniLM) | ~10ms |
-| **LLM Verification** | Semantic match confirmation via external LLM | ~1s |
+| **Embedding Similarity** | Multilingual vector similarity (HuggingFace MiniLM, threshold 0.93) | ~10ms |
 
-- **Alias creation**: L2/L3 semantic matches are aliased for instant L1 hits on repeat
+> **Note:** L3 (LLM verification) was removed — it misjudged HIT/MISS in production, decreasing precision while adding 1-2s latency. L2 with a tuned threshold (0.93) proved more reliable.
+
+- **Alias creation**: L2 semantic matches are aliased for instant L1 hits on repeat
 - Auto-invalidates when notebook sources change
 - Per-request bypass via `bypass_cache` parameter
 - `X-Cache-Status` header: `HIT_PRE_ROUTING_EXACT`, `HIT_EXACT`, `HIT_SEMANTIC`, `MISS`, `BYPASS`
@@ -129,7 +130,7 @@ Four-layer cache that eliminates 40-50s latency for repeated and semantically si
 # Enable (on by default)
 NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED=true
 NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400         # 4 hours
-NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.5          # L2 pre-filter (L3 verifies)
+NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.93         # L2 semantic match threshold
 NLM_PROXY_CACHE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```
 
@@ -439,7 +440,7 @@ NLM_PROXY_CACHE_RESPONSE_CACHE_ENABLED=true
 NLM_PROXY_CACHE_RESPONSE_CACHE_TTL=14400
 NLM_PROXY_CACHE_RESPONSE_CACHE_MAX_ENTRIES=1000
 NLM_PROXY_CACHE_SEMANTIC_MATCH_ENABLED=true
-NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.5
+NLM_PROXY_CACHE_SIMILARITY_THRESHOLD=0.93
 NLM_PROXY_CACHE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 
 # Smart Routing
@@ -541,7 +542,7 @@ src/nlm_proxy/
 │   ├── exceptions.py     # Custom exceptions
 │   ├── llm_client.py     # LangChain ChatModel factory + LLM client
 │   ├── notebook_cache.py # NotebookCache with proactive background refresh
-│   ├── response_cache.py # Three-layer response cache (L1/L2/L3)
+│   ├── response_cache.py # Two-layer response cache (L1 exact + L2 embedding)
 │   ├── routing_graph.py  # LangGraph StateGraph (classify + select nodes)
 │   └── session.py        # SessionStore (chat_id → conversation_id)
 ├── mcp/                  # MCP server (optional)
@@ -559,7 +560,7 @@ Key files:
 - `core/agent.py` — `AgentCore` singleton (routing, caching, NLM queries)
 - `core/routing_graph.py` — LangGraph `StateGraph` with classify + select_notebook nodes
 - `core/llm_client.py` — `create_chat_model()` factory, `LangChainLLMClient` wrapper
-- `core/response_cache.py` — `ResponseCache` with pre-routing L1, three-layer lookup, alias creation
+- `core/response_cache.py` — `ResponseCache` with pre-routing L1, two-layer lookup, alias creation
 - `core/notebook_cache.py` — `NotebookCache` with source change detection + auto-invalidation
 - `scripts/cache-log-analyzer.py` — Log analysis tool (`--json`, `--queries`, `--summary`)
 

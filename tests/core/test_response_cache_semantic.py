@@ -13,7 +13,6 @@ class TestEmbeddingPreFilter:
             max_entries=100,
             ttl_seconds=3600,
             semantic_enabled=True,
-            llm_client=None,  # No Layer 3 for these tests
             embedding_model=None,  # We'll mock embeddings
         )
         return cache
@@ -38,9 +37,9 @@ class TestEmbeddingPreFilter:
         query_emb = np.array([0.95, 0.05, 0.0])
         query_emb /= np.linalg.norm(query_emb)
 
-        candidates = cache._find_similar(query_emb, "nb-1", top_k=2)
+        candidates = cache._find_similar(query_emb, "nb-1")
         assert len(candidates) >= 1
-        # First candidate should be most similar (query A)
+        # Best candidate should be most similar (query A)
         assert candidates[0][1].query == "query A"
 
     def test_find_similar_filters_by_threshold(self):
@@ -75,8 +74,8 @@ class TestEmbeddingPreFilter:
         candidates = cache._find_similar(query_emb, "nb-1")
         assert all(c[1].notebook_id == "nb-1" for c in candidates)
 
-    def test_early_termination_above_exact_threshold(self):
-        """Similarity >= 0.95 should return single result (skip LLM)."""
+    def test_l2_hit_above_threshold(self):
+        """Similarity >= 0.93 should return single result."""
         cache = self._make_cache_with_embeddings()
 
         emb = np.array([1.0, 0.0, 0.0])
@@ -90,7 +89,7 @@ class TestEmbeddingPreFilter:
 
         candidates = cache._find_similar(query_emb, "nb-1")
         assert len(candidates) == 1
-        assert candidates[0][0] >= 0.95
+        assert candidates[0][0] >= 0.93
 
     def test_matrix_rebuild_on_new_entry(self):
         """Matrix should be rebuilt after new entries are added."""
@@ -123,3 +122,63 @@ class TestEmbeddingPreFilter:
 
         cache.invalidate_notebook("nb-1")
         assert "nb-1" not in cache._notebook_matrices
+
+
+class TestLookupAsync:
+    """Test full two-layer async lookup (L1 → L2)."""
+
+    def _make_cache_with_mock_embedding(self):
+        from nlm_proxy.core.response_cache import ResponseCache
+        cache = ResponseCache(
+            max_entries=100,
+            ttl_seconds=3600,
+            semantic_enabled=True,
+            embedding_model=None,  # We'll set _np manually
+            similarity_threshold=0.93,
+        )
+        cache._np = np
+        return cache
+
+    @pytest.mark.asyncio
+    async def test_lookup_async_l2_hit(self):
+        """lookup_async should return L2 hit when similarity > threshold."""
+        cache = self._make_cache_with_mock_embedding()
+
+        emb = np.array([1.0, 0.0, 0.0])
+        emb /= np.linalg.norm(emb)
+
+        cache.store("nb-1", "cached query", "cached answer", None, "conv-a",
+                    embedding=emb.tolist())
+
+        # Mock _compute_embedding to return near-identical vector
+        query_emb = np.array([0.999, 0.001, 0.0])
+        query_emb /= np.linalg.norm(query_emb)
+        cache._compute_embedding = MagicMock(return_value=query_emb)
+
+        result, hit_type = await cache.lookup_async("nb-1", "similar query")
+        assert result is not None
+        assert result.answer == "cached answer"
+        assert hit_type == "semantic"
+        assert cache._stats["l2_hits"] == 1
+
+    @pytest.mark.asyncio
+    async def test_lookup_async_l2_miss(self):
+        """lookup_async should return miss when similarity < threshold."""
+        cache = self._make_cache_with_mock_embedding()
+
+        emb = np.array([1.0, 0.0, 0.0])
+        emb /= np.linalg.norm(emb)
+
+        cache.store("nb-1", "cached query", "cached answer", None, "conv-a",
+                    embedding=emb.tolist())
+
+        # Mock _compute_embedding to return orthogonal vector
+        query_emb = np.array([0.0, 1.0, 0.0])
+        query_emb /= np.linalg.norm(query_emb)
+        cache._compute_embedding = MagicMock(return_value=query_emb)
+
+        result, hit_type = await cache.lookup_async("nb-1", "different query")
+        assert result is None
+        assert hit_type is None
+        assert cache._stats["misses"] == 1
+

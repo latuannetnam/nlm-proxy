@@ -1,8 +1,11 @@
-"""Response cache with three-layer lookup.
+"""Response cache with two-layer lookup.
 
 Layer 1: Exact hash match (0ms) — always active
-Layer 2: Embedding pre-filter via LangChain HuggingFace + NumPy (~10-30ms) — smart routing only
-Layer 3: LLM semantic verification (~1-2s) — smart routing only
+Layer 2: Embedding similarity via LangChain HuggingFace + NumPy (~10-30ms) — smart routing only
+
+L3 (LLM verification) was removed: it consistently misjudged HIT/MISS decisions
+in production, decreasing cache precision while adding 1-2s latency per lookup.
+L2 embedding similarity with a tuned threshold (0.93) proved more reliable.
 
 Cache is global across all users, keyed by (notebook_id, normalized_query).
 Supports LRU eviction and TTL-based expiration.
@@ -12,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -36,11 +38,10 @@ class CachedResponse:
 
 
 class ResponseCache:
-    """Three-layer response cache with LRU + TTL.
+    """Two-layer response cache with LRU + TTL.
 
     Layer 1: exact hash match (synchronous)
-    Layer 2: embedding similarity pre-filter (requires langchain-huggingface)
-    Layer 3: LLM semantic verification (async, requires llm_client)
+    Layer 2: embedding similarity (requires langchain-huggingface)
     """
 
     def __init__(
@@ -48,19 +49,13 @@ class ResponseCache:
         max_entries: int = 1000,
         ttl_seconds: int = 14400,
         semantic_enabled: bool = True,
-        llm_client: object | None = None,
         embedding_model: str | None = None,
-        similarity_threshold: float = 0.7,
-        similarity_exact_threshold: float = 0.95,
-        top_k: int = 10,
+        similarity_threshold: float = 0.93,
     ):
         self._max_entries = max_entries
         self._ttl_seconds = ttl_seconds
         self._semantic_enabled = semantic_enabled
-        self._llm_client = llm_client
         self._similarity_threshold = similarity_threshold
-        self._similarity_exact_threshold = similarity_exact_threshold
-        self._top_k = top_k
 
         # Layer 1: hash → CachedResponse
         self._cache_by_hash: dict[str, CachedResponse] = {}
@@ -85,16 +80,6 @@ class ResponseCache:
         if self._semantic_enabled and self._embedding_model_name:
             self._load_embedding_model()
 
-        # Warn if low threshold without LLM verification
-        if self._similarity_threshold < 0.7 and self._llm_client is None:
-            logger.warning(
-                "[CACHE] L2 threshold (%.2f) is below 0.7 but no LLM client "
-                "configured for L3 verification. Semantic matching may produce "
-                "false positives. Consider raising threshold to 0.7+ or "
-                "configuring an LLM client.",
-                self._similarity_threshold,
-            )
-
         # Thread safety
         self._lock = threading.Lock()
 
@@ -103,8 +88,6 @@ class ResponseCache:
             "pre_routing_l1_hits": 0,
             "l1_hits": 0,
             "l2_hits": 0,
-            "l3_hits": 0,
-            "l3_misses": 0,
             "misses": 0,
             "bypasses": 0,
         }
@@ -311,11 +294,10 @@ class ResponseCache:
         query: str,
         bypass_cache: bool = False,
     ) -> tuple[CachedResponse | None, str | None]:
-        """Full three-layer async lookup: L1 → L2 → L3.
+        """Two-layer async lookup: L1 → L2.
 
         Layer 1: Exact hash match (always)
-        Layer 2: Embedding pre-filter (if semantic_enabled)
-        Layer 3: LLM verification (if candidates found and not near-exact)
+        Layer 2: Embedding similarity (if semantic_enabled)
 
         Returns (CachedResponse, hit_type) on hit, (None, None) on miss.
         """
@@ -329,13 +311,13 @@ class ResponseCache:
         if result is not None:
             return result, hit_type
 
-        # Layers 2-3 only if semantic matching is enabled
+        # Layer 2 only if semantic matching is enabled
         if not self._semantic_enabled:
-            logger.debug("[CACHE] Semantic matching disabled, skipping L2/L3")
+            logger.debug("[CACHE] Semantic matching disabled, skipping L2")
             self._stats["misses"] += 1
             return None, None
 
-        # Layer 2: compute embedding and find similar
+        # Layer 2: compute embedding and find best match above threshold
         logger.debug("[CACHE] L2 computing embedding for '%s'", query[:80])
         query_emb = self._compute_embedding(query)
         if query_emb is None:
@@ -343,48 +325,23 @@ class ResponseCache:
             self._stats["misses"] += 1
             return None, None
 
-        candidates = self._find_similar(query_emb, notebook_id)
-        if not candidates:
+        match = self._find_similar(query_emb, notebook_id)
+        if not match:
             logger.debug("[CACHE] L2 MISS — no similar entries for '%s'", query[:80])
             self._stats["misses"] += 1
             return None, None
 
-        # Check if early termination (similarity >= exact threshold)
-        if len(candidates) == 1 and candidates[0][0] >= self._similarity_exact_threshold:
-            entry = candidates[0][1]
-            with self._lock:
-                entry.hit_count += 1
-            logger.info(
-                "[CACHE] L2 HIT (sim=%.4f, skip-LLM) for '%s' → '%s'",
-                candidates[0][0], query[:60], entry.query[:60],
-            )
-            self._stats["l2_hits"] += 1
-            self.create_alias(notebook_id, query, entry)
-            return entry, "semantic"
-
-        # Layer 3: LLM verification
+        # L2 HIT: best match above threshold
+        sim_score, entry = match[0]
+        with self._lock:
+            entry.hit_count += 1
         logger.info(
-            "[CACHE] L3 verifying %d candidates for '%s'",
-            len(candidates), query[:80],
+            "[CACHE] L2 HIT (sim=%.4f) for '%s' → '%s'",
+            sim_score, query[:60], entry.query[:60],
         )
-        matched = await self._verify_semantic_match(
-            query, [c[1] for c in candidates]
-        )
-        if matched is not None:
-            with self._lock:
-                matched.hit_count += 1
-            logger.info(
-                "[CACHE] L3 HIT (LLM-verified) for '%s' → '%s'",
-                query[:60], matched.query[:60],
-            )
-            self._stats["l3_hits"] += 1
-            self.create_alias(notebook_id, query, matched)
-            return matched, "semantic"
-
-        logger.info("[CACHE] L3 MISS — LLM found no match for '%s'", query[:80])
-        self._stats["l3_misses"] += 1
-        self._stats["misses"] += 1
-        return None, None
+        self._stats["l2_hits"] += 1
+        self.create_alias(notebook_id, query, entry)
+        return entry, "semantic"
 
     # ── Invalidation ─────────────────────────────────────────────────────
 
@@ -478,19 +435,13 @@ class ResponseCache:
         self,
         query_emb: object,  # np.ndarray
         notebook_id: str,
-        top_k: int | None = None,
     ) -> list[tuple[float, CachedResponse]]:
-        """Find similar cached queries via NumPy vectorized cosine similarity.
+        """Find best matching cached query via NumPy vectorized cosine similarity.
 
-        Returns list of (similarity_score, CachedResponse) sorted by score desc.
-        Only entries above self._similarity_threshold are returned.
-        If any entry is above self._similarity_exact_threshold, only that single
-        entry is returned (early termination — skip LLM verification).
+        Returns a list with the single best (similarity_score, CachedResponse)
+        if its score is above self._similarity_threshold, or an empty list.
         """
         import numpy as np
-
-        if top_k is None:
-            top_k = self._top_k
 
         with self._lock:
             entries = self._cache_by_notebook.get(notebook_id, [])
@@ -523,43 +474,24 @@ class ResponseCache:
             # Pre-normalized embeddings means dot product = cosine similarity
             similarities = matrix @ query_emb  # (n,)
 
-            # Early termination: near-perfect match → skip LLM verification
+            # Find best match
             max_sim = float(similarities.max())
-            if max_sim >= self._similarity_exact_threshold:
+            if max_sim >= self._similarity_threshold:
                 best_idx = int(similarities.argmax())
                 logger.info(
-                    "[CACHE] L2 near-exact match (sim=%.4f, threshold=%.2f) "
+                    "[CACHE] L2 match (sim=%.4f, threshold=%.2f) "
                     "for query_emb.shape=%s → '%s'",
-                    max_sim, self._similarity_exact_threshold,
+                    max_sim, self._similarity_threshold,
                     query_emb.shape, entries_with_emb[best_idx].query[:60],
                 )
                 return [(max_sim, entries_with_emb[best_idx])]
 
-            # Filter by threshold and get top-K
-            mask = similarities >= self._similarity_threshold
-            if not mask.any():
-                logger.debug(
-                    "[CACHE] L2 no candidates above threshold=%.2f "
-                    "(max_sim=%.4f, %d entries checked)",
-                    self._similarity_threshold, max_sim, len(entries_with_emb),
-                )
-                return []
-
-            filtered_idx = np.where(mask)[0]
-            sorted_idx = filtered_idx[
-                np.argsort(similarities[filtered_idx])[::-1]
-            ][:top_k]
-            result = [
-                (float(similarities[i]), entries_with_emb[i]) for i in sorted_idx
-            ]
-            logger.info(
-                "[CACHE] L2 found %d candidates (best=%.4f, threshold=%.2f, "
-                "%d entries checked): %s",
-                len(result), result[0][0], self._similarity_threshold,
-                len(entries_with_emb),
-                [(f"{sim:.3f}", e.query[:40]) for sim, e in result],
+            logger.debug(
+                "[CACHE] L2 no match above threshold=%.2f "
+                "(max_sim=%.4f, %d entries checked)",
+                self._similarity_threshold, max_sim, len(entries_with_emb),
             )
-            return result
+            return []
 
     def _load_embedding_model(self) -> None:
         """Load the LangChain HuggingFace embedding model."""
@@ -597,149 +529,7 @@ class ResponseCache:
             logger.exception("[CACHE] Failed to compute embedding")
         return None
 
-    # ── Layer 3: LLM Semantic Verification ───────────────────────────────
 
-    @staticmethod
-    def _build_verification_prompt(
-        new_query: str, cached_queries: list[str]
-    ) -> str:
-        """Build the LLM verification prompt.
-
-        The prompt asks the LLM to determine if the new query is semantically
-        equivalent to any of the cached queries (i.e., would produce the same
-        answer from the same knowledge base).
-        """
-        numbered = "\n".join(
-            f'{i + 1}. "{q}"' for i, q in enumerate(cached_queries)
-        )
-        return (
-            "You are a cache lookup assistant. Determine if the new question "
-            "is asking essentially the same thing as any previously cached "
-            "question. Two questions match ONLY if they would produce the "
-            "EXACT SAME answer from the same knowledge base.\n\n"
-            "Rules:\n"
-            "- Match: same intent, just different wording\n"
-            '  "What are the key points?" ≈ "Summarize the main takeaways"\n'
-            '  "Tóm tắt điểm chính" ≈ "Nêu các ý chính"\n'
-            "- No match: related topic but different scope or different info "
-            "requested\n"
-            '  "What happened in Q1?" ≠ "What happened in Q2?"\n'
-            '  "List the team members" ≠ "Who is the project lead?"\n'
-            "- No match: one question asks for MORE or LESS info than the "
-            "other (superset/subset)\n"
-            '  "What is X?" ≠ "What is X and how does Y work?"\n'
-            '  "Quy trình triển khai dịch vụ" ≠ '
-            '"Dịch vụ X là gì và quy trình triển khai như thế nào?"\n'
-            "- No match: compound/multi-part question vs single-part\n"
-            '  "Explain A" ≠ "Explain A and compare with B"\n\n'
-            f'New question: "{new_query}"\n\n'
-            f"Cached questions:\n{numbered}\n\n"
-            "Reply with ONLY the number of the matching question, or -1 if "
-            "no match."
-        )
-
-    def _parse_semantic_match(
-        self, response: str, num_candidates: int
-    ) -> int | None:
-        """Parse LLM response to matched index (0-based) or None.
-
-        Handles: exact number, -1, "none", "no match", number embedded in text.
-        """
-        text = response.strip()
-        if not text:
-            return None
-
-        # Explicit no-match responses
-        if text == "-1" or text.lower() in ("none", "no match"):
-            return None
-
-        # Try direct integer parse
-        try:
-            index = int(text) - 1  # 1-based → 0-based
-            if 0 <= index < num_candidates:
-                return index
-            return None
-        except ValueError:
-            pass
-
-        # Try to extract a number from mixed text
-        match = re.search(r"\b(\d+)\b", text)
-        if match:
-            index = int(match.group(1)) - 1
-            if 0 <= index < num_candidates:
-                return index
-
-        return None
-
-    async def _verify_semantic_match(
-        self,
-        query: str,
-        candidates: list[CachedResponse],
-    ) -> CachedResponse | None:
-        """Ask LLM to verify if query matches any cached candidate.
-
-        Returns the matched CachedResponse, or None on no match / error.
-        Retries once if LLM returns an empty response.
-        """
-        if not self._llm_client or not candidates:
-            return None
-
-        cached_queries = [c.query for c in candidates]
-        prompt = self._build_verification_prompt(query, cached_queries)
-
-        max_attempts = 2  # retry once on empty response
-        for attempt in range(1, max_attempts + 1):
-            try:
-                response = await self._llm_client.complete(
-                    prompt, max_tokens=10
-                )
-                logger.debug(
-                    "[CACHE] L3 raw LLM response (attempt %d): %r",
-                    attempt, response,
-                )
-
-                # Retry on empty/whitespace response
-                if not response or not response.strip():
-                    if attempt < max_attempts:
-                        logger.warning(
-                            "[CACHE] L3 LLM returned empty response "
-                            "(attempt %d/%d), retrying for '%s'",
-                            attempt, max_attempts, query[:80],
-                        )
-                        continue
-                    logger.warning(
-                        "[CACHE] L3 LLM returned empty response after "
-                        "%d attempts for '%s'",
-                        max_attempts, query[:80],
-                    )
-                    return None
-
-                matched_idx = self._parse_semantic_match(
-                    response, len(candidates)
-                )
-                if matched_idx is not None:
-                    logger.info(
-                        "[CACHE] LLM verified semantic match: "
-                        '"%s" ≈ "%s"',
-                        query,
-                        candidates[matched_idx].query,
-                    )
-                    return candidates[matched_idx]
-                logger.debug(
-                    "[CACHE] LLM: no semantic match for '%s' "
-                    "(response=%r)", query[:80], response,
-                )
-                return None
-            except TimeoutError:
-                logger.warning(
-                    "[CACHE] LLM verification timed out for '%s'", query
-                )
-            except Exception:
-                logger.exception(
-                    "[CACHE] LLM verification failed for '%s'", query
-                )
-
-        return None
 
     # ── Internal helpers ─────────────────────────────────────────────────
 
@@ -805,7 +595,6 @@ class ResponseCache:
                 self._stats["pre_routing_l1_hits"]
                 + self._stats["l1_hits"]
                 + self._stats["l2_hits"]
-                + self._stats["l3_hits"]
             )
             total_lookups = total_hits + self._stats["misses"]
             hit_rate = (
@@ -821,8 +610,6 @@ class ResponseCache:
                 "pre_routing_l1_hits": self._stats["pre_routing_l1_hits"],
                 "l1_hits": self._stats["l1_hits"],
                 "l2_hits": self._stats["l2_hits"],
-                "l3_hits": self._stats["l3_hits"],
-                "l3_misses": self._stats["l3_misses"],
                 "entry_count": len(self._cache_by_hash) - alias_count,
                 "notebook_count": len(self._cache_by_notebook),
             }
