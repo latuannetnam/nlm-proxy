@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from nlm_proxy.core.logging import get_logger
 from nlm_proxy.core.routing_graph import build_routing_graph
+from nlm_proxy.core.tracing import get_tracer, add_span_attributes
 
 logger = get_logger(__name__)
 
@@ -81,42 +82,64 @@ class AgentCore:
                     )
 
         # Phase 1: LangGraph routing (with thread_id for checkpointing)
-        try:
-            config = {}
-            if options.chat_id:
-                config = {"configurable": {"thread_id": options.chat_id}}
-            state = await self.routing_graph.ainvoke(
-                {
-                    "query": query,
-                    "allowed_notebooks": options.allowed_notebooks,
-                },
-                config=config,
-            )
-            return RoutingDecision(
-                request_type=state["request_type"],
-                notebook_id=state.get("notebook_id"),
-                reasoning=state.get("reasoning", ""),
-                conversation_id=options.conversation_id,
-            )
-        except Exception as e:
-            # Fallback: if agent_fallback_on_error is enabled, degrade gracefully
-            logger.error("Routing graph failed: %s. Falling back to first notebook.", e)
-            fallback_notebook = None
-            if self.notebook_cache:
-                notebooks = self.notebook_cache.get_all()
-                if options.allowed_notebooks is not None:
-                    notebooks = [nb for nb in notebooks if nb.id in options.allowed_notebooks]
-                if notebooks:
-                    fallback_notebook = notebooks[0].id
-            if fallback_notebook:
-                return RoutingDecision(
-                    request_type="notebooklm",
-                    notebook_id=fallback_notebook,
-                    reasoning=f"Routing fallback (error: {e})",
+        from opentelemetry.trace import Status, StatusCode
+        tracer = get_tracer(__name__)
+
+        with tracer.start_as_current_span("smart_router.route") as span:
+            try:
+                config = {}
+                if options.chat_id:
+                    config = {"configurable": {"thread_id": options.chat_id}}
+                state = await self.routing_graph.ainvoke(
+                    {
+                        "query": query,
+                        "allowed_notebooks": options.allowed_notebooks,
+                    },
+                    config=config,
+                )
+                decision = RoutingDecision(
+                    request_type=state["request_type"],
+                    notebook_id=state.get("notebook_id"),
+                    reasoning=state.get("reasoning", ""),
                     conversation_id=options.conversation_id,
                 )
-            # No notebooks available — re-raise
-            raise
+                # Record routing decision on span
+                add_span_attributes(
+                    request_type=decision.request_type,
+                    notebook_id=decision.notebook_id,
+                    routing_reasoning=decision.reasoning,
+                )
+                span.set_status(Status(StatusCode.OK))
+                return decision
+            except Exception as e:
+                # Record error on span
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.record_exception(e)
+
+                # Fallback: if agent_fallback_on_error is enabled, degrade gracefully
+                logger.error("Routing graph failed: %s. Falling back to first notebook.", e)
+                fallback_notebook = None
+                if self.notebook_cache:
+                    notebooks = self.notebook_cache.get_all()
+                    if options.allowed_notebooks is not None:
+                        notebooks = [nb for nb in notebooks if nb.id in options.allowed_notebooks]
+                    if notebooks:
+                        fallback_notebook = notebooks[0].id
+                if fallback_notebook:
+                    decision = RoutingDecision(
+                        request_type="notebooklm",
+                        notebook_id=fallback_notebook,
+                        reasoning=f"Routing fallback (error: {e})",
+                        conversation_id=options.conversation_id,
+                    )
+                    add_span_attributes(
+                        request_type=decision.request_type,
+                        notebook_id=decision.notebook_id,
+                        routing_reasoning=decision.reasoning,
+                    )
+                    return decision
+                # No notebooks available — re-raise
+                raise
 
     async def query(self, notebook_id, query, conversation_id=None,
                     source_ids=None, timeout=None) -> dict:

@@ -586,6 +586,11 @@ smart_router.handle_request (parent - full request lifecycle)
     └── smart_router.select_notebook (grandchild, if NotebookLM)
 ```
 
+> **Note**: Pre-routing cache hits (Phase 0) return before the routing graph runs,
+> so `smart_router.route` and its child spans are **not created** for cached responses.
+> On routing errors, `smart_router.route` records the exception and error status
+> before falling back to the first notebook.
+
 ### Span Attributes
 
 #### smart_router.handle_request

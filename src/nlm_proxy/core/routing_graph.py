@@ -62,6 +62,10 @@ async def classify_node(
     response = await chat_model.ainvoke([HumanMessage(content=prompt)])
     response_lower = response.content.lower().strip()
 
+    # Record which LLM model was used for classification
+    llm_model = getattr(chat_model, 'model_name', None) or str(type(chat_model).__name__)
+    add_span_attributes(llm_model=llm_model)
+
     if "notebooklm" in response_lower:
         logger.info("[ROUTER] Classified as NOTEBOOKLM")
         add_span_attributes(classification_result="NOTEBOOKLM")

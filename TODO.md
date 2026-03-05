@@ -1,7 +1,8 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress 
-- [] verify Otel work with new refactor
+- [Doing] verify Otel tracing work with new refactor
+- [] Integrate tracing with Langsmith, Phonenix
 - [] Refactor client.py: file too large
 - [] Add support for Cloud-based embedding model (for example OpenAI, Gemini, Cohere, etc): local model work good enough for now
 - [ ] Enhance conversation management
