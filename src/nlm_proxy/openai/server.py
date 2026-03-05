@@ -143,53 +143,83 @@ async def list_models():
         await client.close()
 
 
-async def _stream_cached_response(decision: RoutingDecision, request: ChatCompletionRequest):
+async def _stream_cached_response(decision: RoutingDecision, request: ChatCompletionRequest,
+                                   tracing_settings=None):
     """Stream a cached response as SSE (used by both Phase 0 and Phase 2 cache hits)."""
-    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-    created = int(time.time())
-    cache_result = decision.cache_result
-    hit_type = decision.cache_hit_type or "exact"
+    tracer = get_tracer(__name__)
+    with tracer.start_as_current_span("smart_router.handle_request") as span:
+        chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        created = int(time.time())
+        cache_result = decision.cache_result
+        hit_type = decision.cache_hit_type or "exact"
 
-    # Reasoning chunk
-    reasoning = decision.reasoning or "Cache hit — returning cached response."
-    reasoning_chunk = ChatCompletionChunk(
-        id=chunk_id, created=created, model=request.model,
-        choices=[Choice(delta=DeltaContent(reasoning_content=reasoning + "\n\n"))],
-    )
-    yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
+        # Record tracing attributes
+        query = request.messages[-1].content if request.messages else ""
+        if tracing_settings and tracing_settings.request_max_length:
+            add_span_attributes(user_query=query[:tracing_settings.request_max_length])
+        if tracing_settings and tracing_settings.response_max_length:
+            add_span_attributes(response_content=cache_result.answer[:tracing_settings.response_max_length])
+        add_span_attributes(
+            response_source=f"cache_{hit_type}",
+            cache_hit_type=hit_type,
+            notebook_id=decision.notebook_id or "",
+        )
 
-    # Thinking chunk (if available and requested)
-    if cache_result.thinking and request.include_thinking:
-        thinking_chunk = ChatCompletionChunk(
+        # Reasoning chunk
+        reasoning = decision.reasoning or "Cache hit — returning cached response."
+        reasoning_chunk = ChatCompletionChunk(
             id=chunk_id, created=created, model=request.model,
-            choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
+            choices=[Choice(delta=DeltaContent(reasoning_content=reasoning + "\n\n"))],
+        )
+        yield f"data: {reasoning_chunk.model_dump_json()}\n\n"
+
+        # Thinking chunk (if available and requested)
+        if cache_result.thinking and request.include_thinking:
+            thinking_chunk = ChatCompletionChunk(
+                id=chunk_id, created=created, model=request.model,
+                choices=[Choice(delta=DeltaContent(reasoning_content=cache_result.thinking))],
+                system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+            )
+            yield f"data: {thinking_chunk.model_dump_json()}\n\n"
+
+        # Answer chunk
+        answer_chunk = ChatCompletionChunk(
+            id=chunk_id, created=created, model=request.model,
+            choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
             system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
         )
-        yield f"data: {thinking_chunk.model_dump_json()}\n\n"
+        yield f"data: {answer_chunk.model_dump_json()}\n\n"
 
-    # Answer chunk
-    answer_chunk = ChatCompletionChunk(
-        id=chunk_id, created=created, model=request.model,
-        choices=[Choice(delta=DeltaContent(content=cache_result.answer))],
-        system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-    )
-    yield f"data: {answer_chunk.model_dump_json()}\n\n"
-
-    # Final chunk
-    final_chunk = ChatCompletionChunk(
-        id=chunk_id, created=created, model=request.model,
-        choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
-        system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
-    )
-    yield f"data: {final_chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
+        # Final chunk
+        final_chunk = ChatCompletionChunk(
+            id=chunk_id, created=created, model=request.model,
+            choices=[Choice(delta=DeltaContent(), finish_reason="stop")],
+            system_fingerprint=f"cache_{hit_type}_conv_{cache_result.conversation_id}",
+        )
+        yield f"data: {final_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
 
 
-def _json_cached_response(decision: RoutingDecision, request: ChatCompletionRequest):
+def _json_cached_response(decision: RoutingDecision, request: ChatCompletionRequest,
+                           tracing_settings=None):
     """Return a cached response as JSON (non-streaming cache hit)."""
     from fastapi.responses import JSONResponse
     cache_result = decision.cache_result
     hit_type = decision.cache_hit_type or "exact"
+
+    # Record tracing attributes for cache hit
+    tracer = get_tracer(__name__)
+    with tracer.start_as_current_span("smart_router.handle_request"):
+        query = request.messages[-1].content if request.messages else ""
+        if tracing_settings and tracing_settings.request_max_length:
+            add_span_attributes(user_query=query[:tracing_settings.request_max_length])
+        if tracing_settings and tracing_settings.response_max_length:
+            add_span_attributes(response_content=cache_result.answer[:tracing_settings.response_max_length])
+        add_span_attributes(
+            response_source=f"cache_{hit_type}",
+            cache_hit_type=hit_type,
+            notebook_id=decision.notebook_id or "",
+        )
 
     resp = ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -490,12 +520,12 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
     if decision.cache_result:
         if request.stream:
             return StreamingResponse(
-                _stream_cached_response(decision, request),
+                _stream_cached_response(decision, request, tracing_settings),
                 media_type="text/event-stream",
                 headers={"X-Cache-Status": f"HIT_{decision.cache_hit_type.upper()}"},
             )
         else:
-            return _json_cached_response(decision, request)
+            return _json_cached_response(decision, request, tracing_settings)
 
     logger.info("[SMART-ROUTER] Decision: %s, notebook=%s", decision.request_type, decision.notebook_id)
 
@@ -509,12 +539,12 @@ async def handle_smart_routing(request: ChatCompletionRequest, http_request: Req
             decision.cache_hit_type = hit_type
             if request.stream:
                 return StreamingResponse(
-                    _stream_cached_response(decision, request),
+                    _stream_cached_response(decision, request, tracing_settings),
                     media_type="text/event-stream",
                     headers={"X-Cache-Status": f"HIT_{hit_type.upper()}"},
                 )
             else:
-                return _json_cached_response(decision, request)
+                return _json_cached_response(decision, request, tracing_settings)
 
     # Phase 3: Execute query (streaming or non-streaming)
     if request.stream:

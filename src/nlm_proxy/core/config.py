@@ -274,7 +274,7 @@ class CacheSettings(BaseSettings):
         default=0.5, description="Min cosine similarity for L2 pre-filter"
     )
     similarity_exact_threshold: float = Field(
-        default=0.85, description="Skip LLM verification threshold"
+        default=0.90, description="Skip LLM verification threshold"
     )
     semantic_match_top_k: int = Field(
         default=10, description="Max candidates sent to LLM"

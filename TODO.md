@@ -2,6 +2,8 @@
 
 ## 🚧 In Progress 
 - [Doing] verify Otel tracing work with new refactor
+- [] Endpoint & script to clear response cache without restart proxy
+- [] Monitor Response cache performance metrics  via Otel
 - [] Integrate tracing with Langsmith, Phonenix
 - [] Refactor client.py: file too large
 - [] Add support for Cloud-based embedding model (for example OpenAI, Gemini, Cohere, etc): local model work good enough for now
