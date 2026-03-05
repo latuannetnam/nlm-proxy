@@ -1,7 +1,6 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress 
-- [Doing] verify Otel tracing work with new refactor
 - [] Endpoint & script to clear response cache without restart proxy
 - [] Monitor Response cache performance metrics  via Otel
 - [] Integrate tracing with Langsmith, Phonenix
@@ -32,3 +31,4 @@
 - [x] Migrate Claude memory to Antigravity
 - [x] **Agentic Workflow**: Switch to Agent library (langchain/langgraph) for more complex tasks: Memory management, Response caching, Cross-notebook query support: docs\plans\2026-03-03-langchain-refactor-design.md
 - [x] Fix all failed, skipped tests
+- [x] verify Otel tracing work with new refactor

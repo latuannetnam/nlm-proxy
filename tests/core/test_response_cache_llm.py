@@ -57,6 +57,21 @@ class TestLLMVerification:
         assert "Summarize main takeaways" in prompt
         assert "List team members" in prompt
         assert "-1" in prompt  # Should mention -1 for no match
+        assert "EXACT SAME" in prompt  # Strict matching language
+        assert "superset" in prompt.lower()  # Superset/subset rule
+
+    def test_build_verification_prompt_superset_rule(self):
+        """Prompt should contain rules to reject superset/subset queries."""
+        from nlm_proxy.core.response_cache import ResponseCache
+        cache = ResponseCache(max_entries=10, ttl_seconds=3600, semantic_enabled=False)
+
+        prompt = cache._build_verification_prompt(
+            "What is X and how does Y work?",
+            ["What is X?"]
+        )
+        # Prompt must contain superset/subset examples
+        assert "MORE or LESS" in prompt
+        assert "compound" in prompt.lower()
 
     @pytest.mark.asyncio
     async def test_verify_semantic_match_returns_matched_entry(self):

@@ -615,8 +615,8 @@ class ResponseCache:
         return (
             "You are a cache lookup assistant. Determine if the new question "
             "is asking essentially the same thing as any previously cached "
-            "question. Two questions match if they would produce the same "
-            "answer from the same knowledge base.\n\n"
+            "question. Two questions match ONLY if they would produce the "
+            "EXACT SAME answer from the same knowledge base.\n\n"
             "Rules:\n"
             "- Match: same intent, just different wording\n"
             '  "What are the key points?" ≈ "Summarize the main takeaways"\n'
@@ -624,7 +624,14 @@ class ResponseCache:
             "- No match: related topic but different scope or different info "
             "requested\n"
             '  "What happened in Q1?" ≠ "What happened in Q2?"\n'
-            '  "List the team members" ≠ "Who is the project lead?"\n\n'
+            '  "List the team members" ≠ "Who is the project lead?"\n'
+            "- No match: one question asks for MORE or LESS info than the "
+            "other (superset/subset)\n"
+            '  "What is X?" ≠ "What is X and how does Y work?"\n'
+            '  "Quy trình triển khai dịch vụ" ≠ '
+            '"Dịch vụ X là gì và quy trình triển khai như thế nào?"\n'
+            "- No match: compound/multi-part question vs single-part\n"
+            '  "Explain A" ≠ "Explain A and compare with B"\n\n'
             f'New question: "{new_query}"\n\n'
             f"Cached questions:\n{numbered}\n\n"
             "Reply with ONLY the number of the matching question, or -1 if "
