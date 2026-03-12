@@ -1,18 +1,16 @@
 # Project Roadmap & Todo
 
 ## 🚧 In Progress 
+- [Doing] **Smart Router**: Cross-notebook query support
 - [] Endpoint & script to clear response cache without restart proxy
 - [] Monitor Response cache performance metrics  via Otel
 - [] Integrate tracing with Langsmith, Phonenix
 - [] Refactor client.py: file too large
 - [] Add support for Cloud-based embedding model (for example OpenAI, Gemini, Cohere, etc): local model work good enough for now
-- [ ] Enhance conversation management
 - [ ] **Scalability**: Loadbalancing request to multiple NotebookLM account (each Pro account has maximum 500 chat request/day): docs\plans\nlm-proxy-account-pool-specification.md
 - [ ] **Pre-processing**: Use LLM task to pre-process in individual notebook models
 - [ ] **Authentication**: Support multiple authentication profiles
 - [ ] **Async Session Management**: Review FastAPI support for SessionStore and Notebook cache
-- [ ] **Smart Router**: Cross-notebook query support
-  - Status: Pending (`feature/cross-notebook-query`)
 - [ ] **Citations**: Return NotebookLM citation with source links
   - Status: Pending (`feature/openai-proxy-citation`) - Current logic needs improvement (NotebookLM may use internal API)
 
